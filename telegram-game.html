@@ -10,7 +10,7 @@
 <style>
 :root{color-scheme:dark;--bg:#0b1512;--surface:#14231d;--line:#2c4138;--ink:#f2f5ec;--muted:#a6b9ae;--mint:#9eeacd;--gold:#f0d194}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(ellipse at top,#18332a,transparent 520px),var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top,#18332a,transparent 520px),var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
 button,select{font:inherit}
 button:focus-visible,select:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
 [hidden]{display:none!important}
@@ -35,8 +35,12 @@ h2{margin:0 0 8px;font-size:16px}
 .btn{min-height:42px;padding:6px 9px;border:1px solid #3e6454;border-radius:9px;background:#23483a;color:#e7fff0;font-weight:760;cursor:pointer;touch-action:manipulation}
 .btn.primary{border-color:var(--mint);background:var(--mint);color:#0d241a}
 .btn:disabled{opacity:.55;cursor:wait}
+#originalPreview{display:inline-flex;align-items:center;text-decoration:none}
 .notice{margin:8px 0;padding:10px;border-radius:10px;background:#24382e;color:#d7f3e4;overflow-wrap:anywhere}
 .notice:empty{display:none}
+.link-profile{margin:12px 0}
+.link-profile summary{cursor:pointer;color:var(--mint)}
+.link-profile input{min-width:0;width:100%;padding:10px;margin:8px 0;border:1px solid var(--line);border-radius:9px;background:#10201a;color:var(--ink)}
 .sim{--rim:#d6dfd8;position:relative;isolation:isolate;display:grid;align-content:space-between;min-width:0;min-height:90px;padding:9px;border-radius:11px;background:radial-gradient(ellipse at 98% 0,color-mix(in srgb,var(--rim) 36%,transparent),transparent 62%),#181f1c;border:1px solid color-mix(in srgb,var(--rim) 60%,#24312a)}
 .sim.rare{--rim:#81bfff}.sim.epic{--rim:#c79eff}.sim.legendary{--rim:#80d9ff}.sim.mythic{--rim:#ff7794}.sim.secret{--rim:#aef3aa}
 .sim strong{display:block;font:800 clamp(11px,3.3vw,19px)/1.25 ui-monospace,monospace;overflow-wrap:anywhere}
@@ -61,10 +65,20 @@ h2{margin:0 0 8px;font-size:16px}
   <div id="notice" class="notice" role="status">Проверяем вход через Telegram…</div>
   <button id="retry" class="btn" type="button" hidden>Повторить запрос</button>
   <div id="game" hidden>
+    <p class="sub"><a id="originalPreview" class="btn" href="./telegram-preview.html">Предпросмотр исходной игры</a></p>
     <div class="wallet">
       <div class="metric"><span>Игровой баланс</span><strong id="balance"></strong></div>
       <div class="metric"><span>Кристаллы</span><strong id="crystals"></strong></div>
     </div>
+    <details class="link-profile" id="profileLink">
+      <summary>Прежний профиль</summary>
+      <p id="profileLinkNotice" class="sub" role="status"></p>
+      <form id="profileLinkForm">
+        <label for="profileLinkCode">Одноразовый код привязки</label>
+        <input id="profileLinkCode" type="password" maxlength="32" pattern="[0-9a-f]{32}" autocapitalize="off" autocomplete="off" required>
+        <button class="btn" type="submit">Привязать профиль</button>
+      </form>
+    </details>
     <nav class="tabs" aria-label="Разделы игры">
       <button type="button" class="tab" data-page="roll" aria-pressed="true">Крутка</button>
       <button type="button" class="tab" data-page="collection" aria-pressed="false">Коллекция</button>
@@ -96,6 +110,7 @@ h2{margin:0 0 8px;font-size:16px}
   const endpoint = "https://wftudhjdehkdhcmtcjkl.supabase.co/functions/v1/telegram-game";
   const telegram = window.Telegram?.WebApp;
   const $ = id => document.getElementById(id);
+  if (location.hash) $("originalPreview").hash = location.hash;
   const money = value => Number(value || 0).toLocaleString("ru-RU") + " ₽";
   const fmt = value => Number(value || 0).toLocaleString("ru-RU");
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
@@ -111,15 +126,24 @@ h2{margin:0 0 8px;font-size:16px}
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 18000);
     try {
-      response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"},
+      // Простой POST даёт прочитать ошибку шлюза, даже если функция ещё не опубликована.
+      response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"text/plain;charset=UTF-8"},
         body:JSON.stringify(body), cache:"no-store", referrerPolicy:"no-referrer", signal:controller.signal});
-      data = await response.json();
+      data = await response.json().catch(() => null);
     } catch {
-      throw new Error("Связь с сервером прервалась. Повтори запрос.");
+      throw new Error(controller.signal.aborted ? "Сервер не ответил вовремя. Повтори запрос." : "Не удалось связаться с сервером игры. Повтори запрос.");
     } finally {
       clearTimeout(timeout);
     }
-    if (!response.ok) throw Object.assign(new Error(data?.error || "Сервер временно недоступен."), { status: response.status });
+    if (!response.ok) {
+      const message = data?.error || (response.status === 404
+        ? "Серверная функция telegram-game ещё не опубликована в Supabase."
+        : response.status === 401
+          ? "Supabase отклонил запрос. Проверь настройки входа функции telegram-game."
+          : `Сервер игры вернул ошибку (${response.status}). Повтори запрос.`);
+      throw Object.assign(new Error(message), { status: response.status });
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Сервер вернул неожиданный ответ. Повтори запрос.");
     return data;
   }
   function card(number) {
@@ -175,6 +199,27 @@ h2{margin:0 0 8px;font-size:16px}
       notice(error.message, error.status !== 401);
     } finally { busy = false; updateButtons(); }
   }
+  async function loadProfileLink(code) {
+    const form = $("profileLinkForm");
+    const field = $("profileLinkCode");
+    const status = $("profileLinkNotice");
+    field.disabled = true;
+    form.querySelector("button").disabled = true;
+    try {
+      const request = code ? {action:"link-profile", code, session} : {action:"profile", session};
+      const profile = await api(request);
+      form.hidden = profile.linked;
+      status.textContent = profile.linked
+        ? `Привязан профиль ${profile.player.name || profile.player.username || "Игрок"}. Номеров: ${profile.numbers.length}, юзов: ${profile.usernames.length}, карточек: ${profile.cards.length}.`
+        : "Код выдаёт администратор игры.";
+      if (profile.linked) field.value = "";
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      field.disabled = false;
+      form.querySelector("button").disabled = false;
+    }
+  }
   async function requestAction() {
     if (!pending || busy) return;
     busy = true;
@@ -212,6 +257,14 @@ h2{margin:0 0 8px;font-size:16px}
     if (pending) void requestAction();
   });
   $("retry").addEventListener("click", () => { if (pending) void requestAction(); else void login(); });
+  $("profileLink").addEventListener("toggle", () => {
+    if (session && $("profileLink").open && !$("profileLinkCode").disabled) void loadProfileLink();
+  });
+  $("profileLinkForm").addEventListener("submit", event => {
+    event.preventDefault();
+    const field = $("profileLinkCode");
+    if (session && !field.disabled) void loadProfileLink(field.value.trim());
+  });
   try {
     telegram?.ready();
     telegram?.expand();
