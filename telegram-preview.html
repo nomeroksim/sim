@@ -9668,6 +9668,7 @@ async function startTelegramPreview() {
         'nav','check-tab','do-check','copy-check','recent-check','open-owner',
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
+        'open-stars-pack','confirm-stars-pack','check-stars-order','copy-stars-order',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
     const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()', 'openExclusive()', 'openTagCollection()']);
@@ -9925,6 +9926,16 @@ async function startTelegramPreview() {
         }
         return lots;
     }
+    async function starsStatus(id) {
+        const version = walletVersion;
+        const result = await api({action:'stars-status',id});
+        if (['paid','refunded'].includes(result.status) && version === walletVersion &&
+            !readOnly && !buying && !isRolling && !rollActionBusy) {
+            const player = allPlayers.find(item => item.isMe);
+            if (player) renderWallet({...player,balance:result.balance,user_crystals:result.walletCrystals});
+        }
+        return result;
+    }
     async function auction() {
         const version = walletVersion;
         const { lots: rentals } = await api({ action:'rentals' });
@@ -10085,6 +10096,7 @@ async function startTelegramPreview() {
         session = state.session;
         const profile = await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
+            starsStatus, starsInvoice: (pack,requestId) => api({action:'stars-invoice',itemId:pack.id,revision:pack.revision,requestId,accepted:true}),
             checkAsset: (kind,value) => api({action:'asset-check',kind,value}),
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
             likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
@@ -18770,6 +18782,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   color:#1b1127; font-size:10px; font-weight:850; text-align:left; transition:transform .14s ease,opacity .14s ease;
 }
 #crystalPacksGrid .cr-buy b { font-size:11px; overflow-wrap:anywhere; }
+#crystalPacksGrid .cr-stars { color:#ffe388; background:#473717; border-color:#8d7235; margin-top:0; }
+#crystalShopConfirm [hidden] { display:none; }
 #crystalPacksGrid .cr-buy:active,#cardShopScreen .cs-buy button:active { transform:scale(.98); }
 #crystalPacksGrid .cr-buy:disabled { opacity:.55; }
 #crystalShopStatus:empty { display:none; }
@@ -18833,7 +18847,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
       <div class="nx-grid" id="shopGrid" aria-live="polite"></div>
     </section>
     <section id="shopCrystalsSection" role="tabpanel" aria-labelledby="shopCrystalsTab" hidden>
-      <div class="cs-heading"><b>Покупка кристаллов</b><span>За игровой баланс</span></div>
+      <div class="cs-heading"><b>Покупка кристаллов</b><span id="crystalShopCurrency">За игровой баланс</span></div>
       <div id="crystalShopStatus" role="status"></div>
       <div class="nx-grid" id="crystalPacksGrid"></div>
     </section>
@@ -18850,9 +18864,11 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   <dialog id="crystalShopConfirm" aria-labelledby="crystalShopConfirmTitle">
     <h2 id="crystalShopConfirmTitle"></h2>
     <p id="crystalShopConfirmSummary"></p>
+    <p id="crystalShopStarsTerms" hidden>Кристаллы зачисляются в основной профиль после подтверждения Telegram. По вопросам оплаты и возврата обратись в «Техподдержку» игры или отправь боту /paysupport. Поддержка Telegram не решает вопросы покупок в игре.</p>
     <form method="dialog" class="cr-actions">
       <button type="submit" class="nx-btn">Отмена</button>
       <button type="button" class="nx-btn nx-primary" data-nx="confirm-crystal-pack">Купить</button>
+      <button type="button" class="nx-btn nx-primary" data-nx="confirm-stars-pack" hidden>Согласен, оплатить</button>
     </form>
   </dialog>
 </div>
@@ -18889,6 +18905,11 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   screen.querySelectorAll('[data-cs-icon]').forEach(node => { node.innerHTML = X.ic(node.dataset.csIcon, 15); });
   let lots = [], filter = 'all', busy = false, loaded = false, opener = null, expiryTimer;
   let shopSection = 'cards', packs = [], packsLoading, packBusy = false, selectedPack = null;
+  const starAccount = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || 'default';
+  const starOrderKey = 'simgame_stars_pending_' + starAccount;
+  const lastStarOrderKey = 'simgame_stars_last_paid_' + starAccount;
+  const readOrder = key => { try { return localStorage.getItem(key); } catch { return null; } };
+  let starsBusy = false;
   const player = () => allPlayers.find(p => p.isMe);
   const saleEnd = lot => lot.available_until ? Date.parse(lot.available_until) : Infinity;
   const available = lot => Number(lot.stock) > 0 && saleEnd(lot) > Date.now();
@@ -18994,7 +19015,13 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   function renderCrystalPacks() {
     renderShopBalances();
     const pending = pendingCrystals(player()?.id);
-    packsStatus.innerHTML = pending ? '<button type="button" class="cs-section" data-nx="retry-crystal-pack" '+(packBusy?'disabled':'')+'>Проверить покупку</button>' : '';
+    const pendingStar = telegramPreview && readOrder(starOrderKey);
+    const lastStar = telegramPreview && readOrder(lastStarOrderKey);
+    const showStars = telegramPreview && packs.some(p => Number(p.price_stars)>0);
+    document.getElementById('crystalShopCurrency').textContent = showStars ? 'Игровой баланс и Telegram Stars' : 'За игровой баланс';
+    packsStatus.innerHTML = (pending ? '<button type="button" class="cs-section" data-nx="retry-crystal-pack" '+(packBusy?'disabled':'')+'>Проверить покупку за игровые ₽</button>' : '') +
+      (pendingStar ? '<button type="button" class="cs-section" data-nx="check-stars-order" '+(starsBusy?'disabled':'')+'>Проверить оплату ★</button>' : '') +
+      (pendingStar || lastStar ? '<button type="button" class="cs-section" data-nx="copy-stars-order">Скопировать номер заказа</button>' : '');
     packsGrid.innerHTML = packs.length ? packs.map(p => {
       const price = X.money(p.price_rub), ratio = Math.round(100 * Number(p.total_grant) / Number(p.price_rub));
       const color = /^#[a-f0-9]{6}$/i.test(p.color) ? p.color : '#a46bff';
@@ -19005,6 +19032,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         <span class="cr-value">${X.gems(ratio)} за 100 игровых ₽</span>
         ${perks ? '<div class="cr-perks">' + perks + '</div>' : ''}
         <button type="button" class="cr-buy" data-nx="open-crystal-pack" data-pack-id="${esc(p.id)}" ${packBusy || pending ? 'disabled' : ''}><span>Купить</span> <b>${price}</b></button>
+        ${showStars && Number(p.price_stars)>0 ? `<button type="button" class="cr-buy cr-stars" data-nx="open-stars-pack" data-pack-id="${esc(p.id)}" ${starsBusy || pendingStar ? 'disabled' : ''}><b>${Number(p.price_stars).toLocaleString('ru-RU')} ★</b> Telegram Stars</button>` : ''}
       </article>`;
     }).join('') : '<div class="cs-empty">Сейчас нет предложений</div>';
   }
@@ -19026,18 +19054,70 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     })();
     return packsLoading;
   }
-  function openCrystalPack(id) {
+  function openCrystalPack(id, stars = false) {
     const pack = packs.find(item => item.id === id);
-    if (!pack || packBusy || confirmPack.open) return;
+    if (!pack || packBusy || starsBusy || confirmPack.open) return;
     const me = player();
     if (!me) { X.fail('Войди в игру для покупки'); return; }
     if (telegramPreview && !telegramGame?.canPurchase()) { X.fail('Покупка доступна с основным профилем'); return; }
-    if (pendingCrystals(me.id)) { renderCrystalPacks(); return; }
-    if (balance < Number(pack.price_rub)) { X.fail('Недостаточно игровых рублей'); return; }
+    if (stars) {
+      if (!telegramPreview || !Number(pack.price_stars) || readOrder(starOrderKey)) return;
+    } else {
+      if (pendingCrystals(me.id)) { renderCrystalPacks(); return; }
+      if (balance < Number(pack.price_rub)) { X.fail('Недостаточно игровых рублей'); return; }
+    }
     selectedPack = pack;
     confirmPack.querySelector('h2').textContent = pack.name;
-    confirmPack.querySelector('p').textContent = 'Получишь ' + X.gems(pack.total_grant) + '. С игрового баланса спишется ' + X.money(pack.price_rub) + '.';
+    confirmPack.querySelector('p').textContent = 'Получишь ' + X.gems(pack.total_grant) +
+      (stars ? '. Цена ' + Number(pack.price_stars).toLocaleString('ru-RU') + ' ★.' : '. С игрового баланса спишется ' + X.money(pack.price_rub) + '.');
+    document.getElementById('crystalShopStarsTerms').hidden = !stars;
+    confirmPack.querySelector('[data-nx="confirm-stars-pack"]').hidden = !stars;
+    confirmPack.querySelector('[data-nx="confirm-crystal-pack"]').hidden = stars;
     confirmPack.showModal();
+  }
+  async function checkStarsOrder(id, wait = false) {
+    for (const pause of wait ? [0,600,1200,2400] : [0]) {
+      if (pause) await new Promise(resolve => setTimeout(resolve,pause));
+      const data = await telegramGame.starsStatus(id);
+      if (data.status === 'paid') {
+        localStorage.setItem(lastStarOrderKey,id);
+        localStorage.removeItem(starOrderKey);
+        X.toast('Зачислено ' + X.gems(data.crystals));
+        return;
+      }
+      if (data.status === 'expired' || data.status === 'refunded') {
+        localStorage.removeItem(starOrderKey);
+        X.toast(data.status === 'expired' ? 'Срок действия счёта истёк' : 'Звёзды возвращены');
+        return;
+      }
+    }
+    X.toast('Подтверждение ещё не пришло. Проверь оплату позже.');
+  }
+  async function handleStarsPurchase(pack) {
+    if (starsBusy || !telegramGame) return;
+    const app = window.Telegram?.WebApp;
+    if (pack && (!app?.openInvoice || app.isVersionAtLeast?.('6.1') === false)) {
+      X.fail('Обнови Telegram, чтобы оплатить звёздами'); return;
+    }
+    starsBusy = true;
+    if (confirmPack.open) confirmPack.close();
+    renderCrystalPacks();
+    try {
+      const pendingId = readOrder(starOrderKey);
+      if (pendingId) { await checkStarsOrder(pendingId); return; }
+      if (!pack) return;
+      const {id,url} = await telegramGame.starsInvoice(pack,crypto.randomUUID());
+      localStorage.setItem(starOrderKey,id);
+      const status = await new Promise((resolve,reject) => {
+        try { app.openInvoice(url,resolve); }
+        catch (error) { localStorage.removeItem(starOrderKey); reject(error); }
+      });
+      if (status === 'cancelled' || status === 'failed') {
+        localStorage.removeItem(starOrderKey);
+        if (status === 'failed') X.fail('Telegram не завершил оплату');
+      } else await checkStarsOrder(id,true);
+    } catch(error) { X.fail(esc(error.message || 'Не удалось открыть оплату в Telegram')); }
+    finally { starsBusy = false; renderCrystalPacks(); }
   }
   async function buyCrystalPack(pack) {
     const me = player();
@@ -19197,6 +19277,15 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
       case 'shop-section': setShopSection(target.dataset.section); break;
       case 'reload-crystal-packs': void loadCrystalPacks(); break;
       case 'open-crystal-pack': openCrystalPack(target.dataset.packId); break;
+      case 'open-stars-pack': openCrystalPack(target.dataset.packId,true); break;
+      case 'confirm-stars-pack': if (confirmPack.open && selectedPack) void handleStarsPurchase(selectedPack); break;
+      case 'check-stars-order': void handleStarsPurchase(null); break;
+      case 'copy-stars-order': {
+        const id = readOrder(starOrderKey) || readOrder(lastStarOrderKey);
+        if (id && navigator.clipboard) navigator.clipboard.writeText(id).then(() => X.toast('Номер заказа скопирован'), () => X.toast(esc(id)));
+        else if (id) X.toast(esc(id));
+        break;
+      }
       case 'confirm-crystal-pack': if (confirmPack.open && selectedPack) void buyCrystalPack(selectedPack); break;
       case 'retry-crystal-pack': void buyCrystalPack(null); break;
       case 'reload-card-shop': void load(); break;
