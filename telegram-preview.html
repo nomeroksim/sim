@@ -9636,7 +9636,7 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -9769,6 +9769,12 @@ async function startTelegramPreview() {
         }
         return lots;
     }
+    async function auction() {
+        const version = walletVersion;
+        const { lots, state } = await api({ action:'auction' });
+        if (state && version === walletVersion && !readOnly && !buying && !isRolling && !rollActionBusy) renderState(state);
+        return lots;
+    }
 
     async function trade(action, fields) {
         if (readOnly) throw new Error('Торговля доступна после переноса профиля.');
@@ -9781,6 +9787,7 @@ async function startTelegramPreview() {
             const state = await api({ action, ...fields, requestId });
             pendingItems.delete(key);
             renderState(state);
+            return state;
         } catch (error) {
             if (error.status >= 400 && error.status < 500) pendingItems.delete(key);
             throw error;
@@ -9871,7 +9878,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, trade, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, market, auction, trade, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -12160,7 +12167,7 @@ const ST = { tab:'auction', sub:'available', sort:'ending', query:'', selMode:fa
 try { const p = JSON.parse(localStorage.getItem('ar_prefs') || '{}'); ['tab', 'sub', 'sort'].forEach(k => { if (typeof p[k] === 'string') ST[k] = p[k]; }); } catch (e) {}
 const savePrefs = () => { try { localStorage.setItem('ar_prefs', JSON.stringify({ tab: ST.tab, sub: ST.sub, sort: ST.sort })); } catch (e) {} };
 const isOpen = () => $('#arScreen').classList.contains('active');
-const myId = () => { const m = X.me(); return m ? String(m.id) : null; };
+const myId = () => { const m = X.me(); return m ? (telegramPreview ? 'me' : String(m.id)) : null; };
 const same = (a, b) => a != null && b != null && String(a) === String(b);
 const myName = () => { const m = X.me(); return (m && (m.name || m.username)) || 'Игрок'; };
 
@@ -12273,6 +12280,7 @@ async function safeGive(type, it, what) {
 /* ─── фоновая обработка: возвраты, победы, выплаты, аренда ─── */
 let settling = false;
 async function settle() {
+  if (telegramPreview) return;
   const m = X.me(); if (settling || !m || !window.AR_RAW) return;
   settling = true;
   try {
@@ -12366,6 +12374,15 @@ async function placeBid(id, amount, isBuyout) {
   if (isBuyout && (!d.buyout || (lb && lb.amount >= d.buyout))) { X.fail('Выкуп уже недоступен'); return; }
   if (!isBuyout && amount < minBid(d)) { X.fail('Минимальная ставка: ' + price(minBid(d), cur)); return; }
   if (X.funds(cur) < amount) { X.fail('Недостаточно средств. Нужно ' + price(amount, cur)); return; }
+  if (telegramPreview) {
+    const updated = await telegramGame.trade(isBuyout ? 'auction-buyout' : 'auction-bid', isBuyout ? {lotId:id} : {lotId:id,amount});
+    if (isBuyout) X.closeDrawer();
+    X.sfx.bid();
+    X.toast(isBuyout ? 'Актив добавлен в коллекцию' : 'Ставка принята · ' + price(amount, cur));
+    if (updated.extended) X.toast('Анти-снайп: лот продлён на 60 секунд', 'warn');
+    await refresh();
+    return;
+  }
   let extended = false;
   const res = await mutate(r, x => {
     if (ended(x)) return false;
@@ -12388,6 +12405,12 @@ async function placeBid(id, amount, isBuyout) {
 async function cancelAuction(id) {
   const r = auctions.find(x => same(x.id, id)); if (!r || !mine(r)) return;
   if (bids(D(r)).length) { X.fail('Лот со ставками снять нельзя'); return; }
+  if (telegramPreview) {
+    await telegramGame.trade('auction-cancel', {lotId:id});
+    X.closeDrawer(); X.sfx.tick(); X.toast('Лот снят, актив вернулся в коллекцию');
+    await refresh();
+    return;
+  }
   const res = await mutate(r, x => { if (x.bids.length || x.returned) return false; x.returned = true; x.result = 'cancelled'; return { fields: { status: 'sold' } }; });
   if (!res.ok) { X.fail(res.abort ? 'На лот уже сделали ставку — снять нельзя' : mutErr(res)); await refresh(); return; }
   await safeGive(typeOf(r), D(r).item, itemName(r));
@@ -12437,6 +12460,14 @@ async function createAuction() {
   if (start < 1) { X.fail('Укажи стартовую цену'); return; }
   if (step < 1) { X.fail('Укажи шаг ставки'); return; }
   if (buy && buy <= start) { X.fail('Выкуп должен быть выше старта'); return; }
+  if (telegramPreview) {
+    await telegramGame.trade('auction-create', {assetId:src.id,assetKind:type === 'number' ? 'number' : 'username',
+      start,step,duration:dur,buyout:buy});
+    ST.tab = 'auction'; savePrefs();
+    X.closeDrawer(); X.sfx.bid(); X.toast('Аукцион запущен');
+    await refresh();
+    return;
+  }
   const m = X.me(), item = type === 'number' ? numItem(src) : uzItem(src);
   const row = { seller_id: m.id, type: type === 'number' ? 'number' : 'nick', price: start,
     number_data: { kind: 'auction', v: 1, item, startPrice: start, minStep: step, buyout: buy, duration: dur, endsAt: now() + dur, extended: 0, bids: [], sellerName: myName(), createdAt: now() } };
@@ -12578,15 +12609,15 @@ function render() {
   renderTop();
   $('#arStats').innerHTML = `<div class="stat g"><small>Аукционов</small><b class="num">${act.length}</b></div>
     <div class="stat o"><small>Вы лидируете</small><b class="num">${act.filter(r => { const l = lastBid(D(r)); return l && same(l.pid, me); }).length}</b></div>
-    <div class="stat t"><small>Активных аренд</small><b class="num">${offers.filter(r => D(r).state === 'rented').length}</b></div>
-    <div class="stat"><small>Комиссия</small><b class="num">5% / 10%</b></div>`;
+    ${telegramPreview ? '' : `<div class="stat t"><small>Активных аренд</small><b class="num">${offers.filter(r => D(r).state === 'rented').length}</b></div>`}
+    <div class="stat"><small>Комиссия</small><b class="num">${telegramPreview ? '5%' : '5% / 10%'}</b></div>`;
   renderTicker();
   const lots = regLots();
   const tabs = [
     { id: 'all', label: 'Все', cnt: lots.length }, { id: 'numbers', label: 'Номера', cnt: lots.filter(l => l.type === 'number').length },
     { id: 'uz', label: 'Юзы', cnt: lots.filter(l => l.type !== 'number').length }, { id: 'my', label: 'Мои', cnt: lots.filter(l => l.isMine).length },
     { id: 'auction', label: 'Аукцион', cnt: act.length },
-    { id: 'rental', label: 'Аренда', cnt: offers.filter(r => D(r).state === 'open' || (D(r).state === 'rented' && (mine(r) || (D(r).renter && same(D(r).renter.pid, me))))).length }
+    ...(telegramPreview ? [] : [{ id: 'rental', label: 'Аренда', cnt: offers.filter(r => D(r).state === 'open' || (D(r).state === 'rented' && (mine(r) || (D(r).renter && same(D(r).renter.pid, me))))).length }])
   ];
   if (!tabs.some(t => t.id === ST.tab)) ST.tab = 'auction';
   $('#arTabs').innerHTML = tabs.map(t => `<button class="${ST.tab === t.id ? 'on' : ''}" data-ar="tab" data-tab="${t.id}">${t.label}<span class="cnt num">${t.cnt}</span></button>`).join('');
@@ -12738,7 +12769,21 @@ function updatePreview() {
 let tickT = null, pollT = null, refreshing = null;
 async function refresh() {
   if (refreshing) return refreshing;
-  refreshing = (async () => { try { if (typeof loadMarketLotsFromDB === 'function') await loadMarketLotsFromDB(); } finally { refreshing = null; } })();
+  refreshing = (async () => {
+    try {
+      if (telegramPreview) {
+        if (!telegramGame) return;
+        window.AR_RAW = await telegramGame.auction();
+        parse();
+        if (isOpen()) {
+          await loadMarketLotsFromDB();
+          render();
+        }
+      } else if (typeof loadMarketLotsFromDB === 'function') await loadMarketLotsFromDB();
+    } catch (error) {
+      if (isOpen()) X.fail(error.message || 'Не удалось обновить аукцион');
+    } finally { refreshing = null; }
+  })();
   return refreshing;
 }
 function tick() {
@@ -12758,7 +12803,13 @@ function tick() {
   if (endedNow) refresh();
 }
 window.openAuction = function () {
+  if (telegramPreview && !telegramGame) { X.fail('Дождись входа через Telegram'); return; }
   ST.selMode = false; ST.sel = {};
+  if (telegramPreview) {
+    ST.tab = 'auction';
+    const rentalButton = $('#arScreen [data-ar="new-offer"]');
+    if (rentalButton) rentalButton.style.display = 'none';
+  }
   X.openScreen('arScreen'); parse(); render(); refresh();
   clearInterval(tickT); tickT = setInterval(tick, 1000);
   clearInterval(pollT); pollT = setInterval(() => { if (!document.hidden) refresh(); }, 12000);
@@ -12777,6 +12828,7 @@ setInterval(() => { if (!document.hidden && X.me() && !isOpen()) refresh(); }, 6
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-ar]'); if (!t) return;
   const a = t.dataset.ar, id = t.dataset.id;
+  if (telegramPreview && ['new-offer','create-offer','rent','cancel-offer','terminate','offer','rental'].includes(a)) return;
   switch (a) {
     case 'close': closeAuction(); break;
     case 'noop': break;
