@@ -18349,24 +18349,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   }
   function showBadge(slot, cardId) {
     const card = byId(cardId, slot.dataset.collectorPlayer);
-    if (!card) {
-      if (slot.firstElementChild?.classList.contains('cc-badge')) return;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'cc-badge';
-      button.textContent = '✓';
-      if (String(slot.dataset.collectorPlayer) === String(me()?.id)) {
-        button.dataset.cardAction = 'collection';
-        button.setAttribute('aria-label','Выбрать карточку для профиля');
-        button.title = 'Выбрать карточку для профиля';
-      } else {
-        button.disabled = true;
-        button.title = 'Карточка профиля не выбрана';
-        button.setAttribute('aria-label','Карточка профиля не выбрана');
-      }
-      slot.replaceChildren(button);
-      return;
-    }
+    if (!card) { slot.replaceChildren(); return; }
     if (slot.firstElementChild?.dataset.cardId === card.id) return;
     const button = document.createElement('button');
     button.type = 'button';
