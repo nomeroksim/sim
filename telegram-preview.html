@@ -6091,8 +6091,8 @@ function updateMythicNumbers() {
         </div>
         <div class="promo-title">Промокод</div>
         <div class="promo-desc">Коды публикуем в канале новостей и раздаём на событиях. Каждый код — один раз на игрока.</div>
-        <div class="promo-input"><input type="text" id="promoInput" placeholder="Например, BOP" maxlength="20"></div>
-        <button class="promo-activate" onclick="activatePromo()">Активировать</button>
+        <div class="promo-input"><input type="text" id="promoInput" placeholder="Например, BOP" maxlength="20" autocomplete="off" spellcheck="false" enterkeyhint="go" onkeydown="if(event.key==='Enter')document.getElementById('promoActivate').click()"></div>
+        <button type="button" class="promo-activate" id="promoActivate" onclick="activatePromo()">Активировать</button>
     </div>
 
     <!-- ИГРЫ -->
@@ -7754,8 +7754,25 @@ async function checkNumber() {
         
         
         async function activatePromo() {
-    const input = document.getElementById('promoInput').value.trim().toUpperCase();
+    const field = document.getElementById('promoInput');
+    const input = field.value.trim().toUpperCase();
     if (!input) { showToast('error', 'Введите промокод', ''); return; }
+    if (telegramPreview) {
+        const button = document.getElementById('promoActivate');
+        if (button.disabled) return;
+        if (!telegramGame?.canRoll()) { showToast('error', 'Открой игру из Telegram, чтобы активировать код', ''); return; }
+        button.disabled = field.readOnly = true;
+        try {
+            const state = await telegramGame.trade('promo-redeem',{code:input});
+            field.value = '';
+            showToast('success','Промокод активирован!',state.promoRewards.join(' · '));
+        } catch (error) {
+            showToast('error',error.message || 'Не удалось активировать промокод','');
+        } finally {
+            button.disabled = field.readOnly = false;
+        }
+        return;
+    }
 
     const me = allPlayers.find(p => p.isMe);
     if (!me) { showToast('error', 'Нет игрока', ''); return; }
@@ -9647,7 +9664,7 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
