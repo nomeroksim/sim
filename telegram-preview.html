@@ -9662,11 +9662,12 @@ async function startTelegramPreview() {
 
     const previewSafeActions = new Set(['close','close-drawer','sound','dismiss-hint','filter','cycle-sort',
         'cx-view','cx-spin','cx-fav','cx-move','open-number','copy-number','sec-reveal','sell-number','toggle-select',
+        'nav','check-tab','do-check','copy-check','recent-check','open-owner',
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -10035,6 +10036,7 @@ async function startTelegramPreview() {
         session = state.session;
         const profile = await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, duel: api,
+            checkAsset: (kind,value) => api({action:'asset-check',kind,value}),
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
             likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
                 profileId:profileId === 'self' ? null : profileId, liked}),
@@ -11413,8 +11415,8 @@ function renderCheck() {
   $('#nxCheckSeg').innerHTML = CHECK_TABS.map(t => `<button class="${NX.checkTab === t.id ? 'on' : ''}" data-nx="check-tab" data-tab="${t.id}">${ic(t.icon, 15)}${t.label}</button>`).join('');
   const inp = $('#nxCheckInput');
   if (NX.checkTab === 'ru') { inp.type = 'tel'; inp.placeholder = '+7 000 000-00-00'; inp.maxLength = 22; }
-  else if (NX.checkTab === 'secret') { inp.type = 'tel'; inp.placeholder = '0 – 999'; inp.maxLength = 3; }
-  else { inp.type = 'text'; inp.placeholder = '@username'; inp.maxLength = 33; }
+  else if (NX.checkTab === 'secret') { inp.type = 'tel'; inp.placeholder = telegramPreview ? '0 или 0123456789' : '0 – 999'; inp.maxLength = telegramPreview ? 10 : 3; }
+  else { inp.type = 'text'; inp.placeholder = '@username'; inp.maxLength = telegramPreview ? 51 : 33; }
   $('#nxCheckIc').innerHTML = ic(NX.checkTab === 'uz' ? 'hash' : NX.checkTab === 'secret' ? 'lock' : 'sim', 18);
   const box = $('#nxRecent'); box.hidden = !NX.recent.length;
   $('#nxRecentPills').innerHTML = NX.recent.slice(0, 6).map(r => `<button class="nx-pill" data-nx="recent-check" data-type="${esc(r.type)}" data-val="${esc(r.val)}">${esc(r.val)}</button>`).join('');
@@ -11441,14 +11443,43 @@ async function ownerInfo(playerId) {
   const m = me();
   return { name: p.name || p.username || 'Игрок', tag: p.tag || null, id: p.id, me: !!(m && String(m.id) === String(p.id)) };
 }
+async function checkTelegramAsset(type, raw) {
+  if (!telegramGame) throw new Error('Дождись входа через Telegram');
+  let val, rarity, price;
+  if (type === 'ru') {
+    const number = /^[+0-9()\s–—-]+$/.test(raw) && parseSpinNumber(raw);
+    if (!number) throw new Error('Введи номер с кодом, например +44 770 123-45-67');
+    val = formatSpinNumber(number.prefix,number.code,number.digits);
+    rarity = classifyByPattern(number.digits);
+    price = estimate(NUM_RANGES,rarity,val);
+  } else if (type === 'secret') {
+    if (!/^(0|[1-9][0-9]{0,2}|0123456789)$/.test(raw)) throw new Error('Введи секретный номер от 0 до 999 или 0123456789');
+    val = raw;
+    rarity = 'secret';
+    price = val === '0123456789'
+      ? estimate({secret:[750000000,950000000]},rarity,val) : estimate(NUM_RANGES,rarity,val);
+  } else {
+    if (!/^@?[A-Za-z0-9_]{1,50}$/.test(raw)) throw new Error('В юзе только латиница, цифры и _');
+    const clean = raw.replace(/^@/,'');
+    val = '@' + clean;
+    rarity = calculateUzRarity(val);
+    price = estimate(UZ_RANGES,rarity,clean.toLowerCase());
+  }
+  const {asset} = await telegramGame.checkAsset(type,val);
+  if (!asset) return {val,rarity,price,owner:null,source:null};
+  val = type === 'uz' ? '@' + asset.value.replace(/^@/,'') : asset.value;
+  return {val,rarity:asset.rarity || rarity,price:asset.price == null ? price : Number(asset.price),owner:asset.owner,source:asset.source};
+}
 async function doCheck() {
   if (NX.busy) return;
   const raw = $('#nxCheckInput').value.trim(), type = NX.checkTab, btn = $('#nxCheckBtn');
   if (!raw) { fail('Введи значение для проверки'); return; }
-  let val, rarity, price, owner = null;
+  let val, rarity, price, owner = null, source;
   busy(btn, true);
   try {
-    if (type === 'ru') {
+    if (telegramPreview) {
+      ({val,rarity,price,owner,source} = await checkTelegramAsset(type,raw));
+    } else if (type === 'ru') {
       const number = parseSpinNumber(raw);
       if (!number) { busy(btn, false); fail('Введи номер с кодом, например +44 770 123-45-67'); return; }
       val = formatSpinNumber(number.prefix, number.code, number.digits);
@@ -11476,24 +11507,27 @@ async function doCheck() {
       if (found) { val = found.name.startsWith('@') ? found.name : '@' + found.name; owner = await ownerInfo(found.player_id); }
     }
   } catch (e) {
-    busy(btn, false); fail('Нет связи с базой: ' + esc(e.message || e)); return;
+    busy(btn, false); fail(telegramPreview ? esc(e.message || 'Не удалось выполнить проверку') : 'Нет связи с базой: ' + esc(e.message || e)); return;
   }
   busy(btn, false);
+  if (telegramPreview && (NX.screen !== 'check' || NX.checkTab !== type || $('#nxCheckInput').value.trim() !== raw)) return;
   NX.recent = [{ type, val }, ...NX.recent.filter(r => r.val !== val)].slice(0, 8); LS.set('nx_recent', NX.recent);
   const isUz = type === 'uz';
   const r = isUz ? (UZR[rarity] || UZR.common) : (RAR[rarity] || RAR.common);
   const tagLabel = owner && owner.tag ? (typeof tagList === 'function' ? tagList(owner.tag) : [owner.tag]).map(k => (typeof TAGS !== 'undefined' && TAGS[k] ? TAGS[k].label : k)).join(' · ') : '';
+  const sourceLabel = {market:'На маркете',auction:'На аукционе',rental:'Выставлен в аренду',rented:'В аренде'}[source];
+  const ownerLabel = owner?.me ? 'Это твой актив' : 'Владелец · открыть профиль';
   const res = $('#nxCheckResult');
   res.innerHTML = `<div class="nx-cert" style="--c-bg:${r.color}1f;--c-line:${r.color}66">
     <span class="nx-status ${owner ? 'busy' : 'free'}">${ic(owner ? 'lock' : 'check', 13)}${owner ? 'ЗАНЯТ' : 'СВОБОДЕН'}</span>
     <div class="nx-cert-num" style="color:${r.color}">${esc(val)}</div>
     <div class="nx-cert-grid">
       <div class="nx-cert-cell"><small>${isUz ? 'Редкость юза' : 'Редкость'}</small><b style="color:${r.color}">${r.label}</b></div>
-      <div class="nx-cert-cell"><small>${owner ? 'Цена владельца' : 'Оценка'}</small><b class="nx-num">${isUz ? cry(price) : money(price)}</b></div>
+      <div class="nx-cert-cell"><small>${owner && !telegramPreview ? 'Цена владельца' : 'Оценка'}</small><b class="nx-num">${isUz ? cry(price) : money(price)}</b></div>
     </div>
     ${owner
-      ? `<button class="nx-owner" ${owner.me ? '' : `data-nx="open-owner" data-id="${esc(owner.id)}"`}><span class="nx-owner-ava">${esc((owner.name || '?')[0].toUpperCase())}</span><span class="nx-owner-info"><b>${esc(owner.name)} ${tagLabel ? `<span class="nx-tag">${esc(tagLabel)}</span>` : ''}</b><span>${owner.me ? 'Это твой актив' : 'Владелец · открыть профиль'}</span></span>${owner.me ? '' : ic('chev', 16)}</button>`
-      : `<div class="nx-owner"><span class="nx-owner-ava" style="background:rgba(95,211,141,.14);color:var(--nx-ok);border-color:rgba(95,211,141,.4)">${ic('check', 16)}</span><span class="nx-owner-info"><b>Можно забирать</b><span>Ни у кого нет в коллекции</span></span><button class="nx-ibtn" data-nx="copy-check" data-val="${esc(val)}" aria-label="Скопировать">${ic('copy', 16)}</button></div>`}
+      ? `<button class="nx-owner" ${owner.me ? '' : `data-nx="open-owner" data-id="${esc(owner.id)}"`}><span class="nx-owner-ava">${esc((owner.name || '?')[0].toUpperCase())}</span><span class="nx-owner-info"><b>${esc(owner.name)} ${tagLabel ? `<span class="nx-tag">${esc(tagLabel)}</span>` : ''}</b><span>${sourceLabel ? sourceLabel + ' · ' : ''}${ownerLabel}</span></span>${owner.me ? '' : ic('chev', 16)}</button>`
+      : `<div class="nx-owner"><span class="nx-owner-ava" style="background:rgba(95,211,141,.14);color:var(--nx-ok);border-color:rgba(95,211,141,.4)">${ic('check', 16)}</span><span class="nx-owner-info"><b>${telegramPreview ? 'Свободен в игре' : 'Можно забирать'}</b><span>${telegramPreview ? 'Совпадений в коллекциях и лотах нет' : 'Ни у кого нет в коллекции'}</span></span><button class="nx-ibtn" data-nx="copy-check" data-val="${esc(val)}" aria-label="Скопировать">${ic('copy', 16)}</button></div>`}
   </div>`;
   res.classList.remove('show'); void res.offsetWidth; res.classList.add('show');
   owner ? sfx.tick() : sfx.ok();
@@ -11803,7 +11837,7 @@ document.addEventListener('click', e => {
   const a = t.dataset.nx, key = t.dataset.key, id = t.dataset.id;
   switch (a) {
     case 'close': if (NX.screen) hide(NX.screen); break;
-    case 'nav': show(t.dataset.screen); break;
+    case 'nav': if (telegramPreview && t.dataset.screen === 'market') window.openMarket(); else show(t.dataset.screen); break;
     case 'sound': NX.sound = !NX.sound; LS.set('nx_sound', NX.sound); renderChrome(); if (NX.sound) sfx.ok(); break;
     case 'dismiss-hint': NX.hint = false; LS.set('nx_hint', false); renderCollection(); sfx.tick(); break;
     case 'filter': NX.filter = t.dataset.r; renderCollection(); sfx.tick(); break;
