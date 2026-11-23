@@ -3,6 +3,11 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- Telegram Mini App SDK: нужен для оплаты боевого пропуска звёздами. Грузится асинхронно и не тормозит запуск -->
 <script src="https://telegram.org/js/telegram-web-app.js" async></script>
+<script>
+if (location.pathname.endsWith('/telegram-preview.html') || new URLSearchParams(location.search).get('telegram-preview') === '1') {
+    document.documentElement.classList.add('telegram-preview','telegram-pending');
+}
+</script>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -5315,13 +5320,17 @@ function updateMythicNumbers() {
 }
 </script>
 <style>
-.telegram-preview-note,.telegram-preview-bind { width:min(100% - 32px, 480px); margin:8px auto; padding:10px 12px; border:1px solid rgba(127,224,214,.22); border-radius:12px; color:#b5c8be; background:#14231c; font-size:12px }
-.telegram-preview-bind:not([hidden]) { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px }
-.telegram-preview-bind label { grid-column:1/-1 }
-.telegram-preview-bind input,.telegram-preview-bind button { min-width:0; min-height:40px; border:1px solid #385448; border-radius:8px; padding:0 10px; color:inherit; background:#0d1812; font-size:16px }
+.telegram-pending body > :not(#telegramEntryStatus) { visibility:hidden }
+.telegram-preview .profile-copy-id { display:none }
+#telegramEntryStatus:not([hidden]) { position:fixed; inset:0; z-index:10000; display:grid; place-content:center; justify-items:center; gap:12px; padding:20px; text-align:center; background:#0b1512; color:#e0eee7 }
+#telegramEntryStatus button { min-height:44px; padding:0 14px; border:1px solid #385448; border-radius:10px; background:#1c3328; color:inherit }
 </style>
 </head>
 <body>
+<div id="telegramEntryStatus" hidden>
+    <p role="status">Загружаем игру…</p>
+    <button type="button" hidden>Повторить вход</button>
+</div>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
 <clipPath id="simClip" clipPathUnits="objectBoundingBox"><path d="M0.0588 0 H0.8765 L1 0.2049 V0.9024 Q1 1 0.9412 1 H0.0588 Q0 1 0 0.9024 V0.0976 Q0 0 0.0588 0 Z"/></clipPath>
@@ -5989,7 +5998,7 @@ function updateMythicNumbers() {
         SIM<b>GAME</b>
       </div>
       <div class="sp"></div>
-      <button class="ibtn" onclick="copyProfileId()" aria-label="Скопировать ID">
+      <button class="ibtn profile-copy-id" onclick="copyProfileId()" aria-label="Скопировать ID">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
     </header>
@@ -6371,8 +6380,7 @@ function updateMythicNumbers() {
     };
 
    // ====== АВТОРИЗАЦИЯ (для APK) ======
-const telegramPreview = location.pathname.endsWith('/telegram-preview.html') ||
-    new URLSearchParams(location.search).get('telegram-preview') === '1';
+const telegramPreview = document.documentElement.classList.contains('telegram-preview');
 let telegramGame = null;
 
 async function initTelegram() {
@@ -8488,7 +8496,7 @@ function updateProfileUI(){
           </div>
           ${me.telegram_username ? `<span class="telegram-username">@${escHtml(me.telegram_username)}</span>` : ''}
           <div class="meta-row">
-            <button class="idchip num" onclick="copyProfileId()">ID ${me.id} ${pIcon('copy',13)}</button>
+            ${telegramPreview ? '' : `<button class="idchip num" onclick="copyProfileId()">ID ${escHtml(me.id)} ${pIcon('copy',13)}</button>`}
             <span class="online"><i></i>онлайн</span>
           </div>
           <div class="since">В игре с ${me.created_at ? new Date(me.created_at).toLocaleDateString('ru-RU') : '—'}</div>
@@ -9654,13 +9662,11 @@ async function loadMarketLotsFromDB() {
         number_id: l.number_id
     }));
 }
-// Предпросмотр исходного интерфейса с отдельной серверной сессией Telegram.
+// Запуск игры с серверной сессией Telegram.
 async function startTelegramPreview() {
-    const balanceBox = document.querySelector('.stats-bar');
-    const notice = document.createElement('p');
-    notice.className = 'telegram-preview-note';
-    notice.setAttribute('role', 'status');
-    balanceBox.after(notice);
+    const entry = document.getElementById('telegramEntryStatus');
+    const entryMessage = entry.querySelector('p');
+    const retry = entry.querySelector('button');
     document.getElementById('roamButton').disabled = true;
     document.getElementById('tariffButton').disabled = true;
     updateRoamingLabel();
@@ -9700,7 +9706,7 @@ async function startTelegramPreview() {
     refreshRollActions();
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
-    let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity;
+    let session = '', readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity, profileId;
     let passCards = [], shopCards = [];
     let cardVault = null, vaultRequest;
     let buying = false;
@@ -9847,12 +9853,13 @@ async function startTelegramPreview() {
             cardVault = state.cardVault;
             ratingProfiles.clear();
         }
+        if (state.tags) playerTags = state.tags;
         const selected = currentRolledNumber?.id;
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
         telegramUsernames(state.usernames);
-        renderWallet({ id:'tg-preview', ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
+        renderWallet({ id:profileId, ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             main_uz:pinnedUz.join(',') || null, second_uz:null,
             rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
         if (state.pass) acceptPass(state.pass);
@@ -9862,7 +9869,6 @@ async function startTelegramPreview() {
         renderMiniCards();
     }
     async function renderLinked(profile, state) {
-        linked = true;
         walletVersion++;
         readOnly = true;
         refreshRollActions();
@@ -9871,15 +9877,12 @@ async function startTelegramPreview() {
         pinnedUz = parsePinnedUz(profile.player);
         telegramUsernames(profile.usernames,false);
         window.COLLECTOR_CARDS?.setTelegramCollection(profile);
-        bind.hidden = true;
-        code.value = '';
         if (state?.walletScope === 'original' || profile.canActivate) {
             const imported = state?.walletScope === 'original' ? state : await api({ action: 'activate-original' });
             readOnly = false;
             renderState(imported);
-            void refreshCardVault().catch(() => {});
-            void refreshTags().catch(() => {});
-            notice.textContent = 'Прежний профиль подключён. Крутки и коллекция используют перенесённый баланс.';
+            if (!imported.cardVault) void refreshCardVault().catch(() => {});
+            if (!imported.tags) void refreshTags().catch(() => {});
             return;
         }
         recentNumbers = [];
@@ -9890,7 +9893,6 @@ async function startTelegramPreview() {
         renderWallet(profile.player);
         updateCollection();
         renderMiniCards();
-        notice.textContent = 'Прежний профиль привязан. Баланс и коллекция доступны для просмотра.';
     }
 
     async function store() {
@@ -9952,7 +9954,7 @@ async function startTelegramPreview() {
 
     async function trade(action, fields) {
         if (readOnly) throw new Error('Торговля доступна после переноса профиля.');
-        if (isRolling || rollActionBusy || buying || bindButton.disabled) throw new Error('Дождись завершения текущей операции.');
+        if (isRolling || rollActionBusy || buying) throw new Error('Дождись завершения текущей операции.');
         const key = action + ':' + JSON.stringify(fields);
         const requestId = pendingItems.get(key) || crypto.randomUUID();
         pendingItems.set(key, requestId);
@@ -10018,7 +10020,7 @@ async function startTelegramPreview() {
     }
     async function changeItems(action, numbers) {
         if (readOnly) throw new Error('Изменение прежней коллекции пока недоступно.');
-        if (bindButton.disabled || buying) throw new Error('Дождись завершения текущей операции.');
+        if (buying) throw new Error('Дождись завершения текущей операции.');
         const ids = numbers.map(number => number.id).sort();
         const key = action + ':' + ids.join(',');
         const requestId = pendingItems.get(key) || crypto.randomUUID();
@@ -10037,7 +10039,7 @@ async function startTelegramPreview() {
         }
     }
     async function roll(count) {
-        if (readOnly || isRolling || rollActionBusy || bindButton.disabled || buying) return;
+        if (readOnly || isRolling || rollActionBusy || buying) return;
         isRolling = true;
         document.getElementById('tariffButton').disabled = true;
         document.getElementById('roamButton').disabled = true;
@@ -10064,44 +10066,36 @@ async function startTelegramPreview() {
         }
     }
 
-    const bind = document.createElement('form');
-    bind.className = 'telegram-preview-bind';
-    bind.hidden = true;
-    bind.innerHTML = '<label for="telegramBindCode">Код привязки прежнего профиля</label>' +
-        '<input id="telegramBindCode" type="password" maxlength="32" pattern="[0-9a-f]{32}" autocomplete="off" required>' +
-        '<button type="submit">Привязать</button>';
-    notice.after(bind);
-    const code = bind.querySelector('input');
-    const bindButton = bind.querySelector('button');
-    bind.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!session || linked || isRolling || rollActionBusy || bindButton.disabled) return;
-        bindButton.disabled = true;
-        try {
-            const profile = await api({ action: 'link-profile', code: code.value.trim() });
-            await renderLinked(profile);
-        } catch (error) {
-            showToast('error', error.message, '');
-        } finally { bindButton.disabled = false; }
-    });
-
-    try {
+    async function loadGame() {
+      entry.hidden = false;
+      retry.hidden = true;
+      entryMessage.textContent = 'Загружаем игру…';
+      try {
         if (!window.Telegram?.WebApp) {
             const sdk = document.querySelector('script[src^="https://telegram.org/js/telegram-web-app.js"]');
             if (sdk) await new Promise(resolve => {
-                const timeout = setTimeout(resolve, 4000);
-                sdk.addEventListener('load', () => { clearTimeout(timeout); resolve(); }, { once: true });
+                const finish = () => {
+                    clearTimeout(timeout);
+                    sdk.removeEventListener('load',finish);
+                    sdk.removeEventListener('error',finish);
+                    resolve();
+                };
+                const timeout = setTimeout(finish,4000);
+                sdk.addEventListener('load',finish);
+                sdk.addEventListener('error',finish);
             });
         }
         const app = window.Telegram?.WebApp;
-        app?.ready();
         app?.expand();
-        if (!app?.initData) { notice.textContent = 'Открой предпросмотр кнопкой Mini App в Telegram.'; return; }
-        notice.textContent = 'Проверяем вход через Telegram…';
+        if (!app?.initData) {
+            entryMessage.textContent = 'Открой игру из Telegram.';
+            return;
+        }
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         telegramIdentity = state.telegramProfile;
-        const profile = await api({ action: 'profile' });
+        profileId = state.profileId;
+        const profile = state.linkedProfile ?? await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
             starsStatus, starsInvoice: (pack,requestId) => api({action:'stars-invoice',itemId:pack.id,revision:pack.revision,requestId,accepted:true}),
             starsPassInvoice: (plan,requestId) => api({action:'stars-pass-invoice',plan,requestId,accepted:true}),
@@ -10120,21 +10114,26 @@ async function startTelegramPreview() {
         if (profile.linked) await renderLinked(profile, state);
         else {
             renderState(state);
-            void refreshCardVault().catch(() => {});
-            void refreshTags().catch(() => {});
-            bind.hidden = false;
-            notice.textContent = 'Предпросмотр Telegram. Крутка использует отдельный баланс мини-версии.';
+            if (!state.cardVault) void refreshCardVault().catch(() => {});
+            if (!state.tags) void refreshTags().catch(() => {});
         }
         window.TELEGRAM_RATING?.warm();
-    } catch (error) {
-        notice.textContent = error.status ? error.message : 'Не удалось загрузить игру. Открой Mini App заново.';
+        entry.hidden = true;
+        document.documentElement.classList.remove('telegram-pending');
+      } catch (error) {
+        entryMessage.textContent = error.status ? error.message : 'Не удалось загрузить игру.';
+        retry.hidden = false;
+      } finally {
+        window.Telegram?.WebApp?.ready();
+      }
     }
+    retry.addEventListener('click',loadGame);
+    await loadGame();
 }
 
     // ====== ИНИЦИАЛИЗАЦИЯ ======
 (async function boot() {
     if (telegramPreview) {
-        document.documentElement.classList.add('telegram-preview');
         window.addEventListener('DOMContentLoaded', startTelegramPreview, { once: true });
         return;
     }
