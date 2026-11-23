@@ -8470,7 +8470,7 @@ function updateProfileUI(){
           </div>
           <div class="since">В игре с ${me.created_at ? new Date(me.created_at).toLocaleDateString('ru-RU') : '—'}</div>
         </div>
-      </div><div class="profile-likes" data-profile-like="${escHtml(me.id)}"></div>`;
+      </div><div class="profile-likes" data-profile-like="${telegramPreview ? 'self' : escHtml(me.id)}"></div>`;
     window.PROFILE_LIKES?.mount(identity.querySelector('[data-profile-like]'));
   }
 
@@ -9730,6 +9730,7 @@ async function startTelegramPreview() {
         if (scope !== walletScope) {
             ratingProfiles.clear();
             window.TELEGRAM_RATING?.clear();
+            window.PROFILE_LIKES?.clear();
             passCards = []; shopCards = []; freeRolls = 0;
             for (const key of Object.keys(luckBoost)) luckBoost[key] = 0;
             window.TELEGRAM_PASS?.clear();
@@ -9967,6 +9968,8 @@ async function startTelegramPreview() {
         const profile = await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, duel: api,
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
+            likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
+                profileId:profileId === 'self' ? null : profileId, liked}),
             canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
@@ -10156,7 +10159,7 @@ async function openOtherProfile(playerId, assets) {
                 <div class="since">В игре с ${p.created_at ? new Date(p.created_at).toLocaleDateString('ru-RU') : '—'}</div>
             </div>
         </div>
-        ${telegramPreview ? '' : `<div class="profile-likes" data-profile-like="${escHtml(p.id)}" data-can-vote="${allPlayers.some(player => player.isMe && String(player.id) !== String(p.id))}"></div>`}
+        <div class="profile-likes" data-profile-like="${telegramPreview && p.isMe ? 'self' : escHtml(p.id)}" data-can-vote="${telegramPreview ? !p.isMe : allPlayers.some(player => player.isMe && String(player.id) !== String(p.id))}"></div>
     `;
     window.PROFILE_LIKES?.mount(document.querySelector('#identity-other [data-profile-like]'));
 
@@ -19085,15 +19088,25 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     }
 
     function paintProfile(id,state,animate = false) {
+        if (states.get(id) !== state) return;
         document.querySelectorAll('[data-profile-like]').forEach(slot => {
             if (slot.dataset.profileLike !== id || !slot.querySelector('.pl-total')) return;
             paint(slot,state);
             if (!animate || !slot.querySelector('button')) return;
             slot.classList.remove('pl-flash');
             requestAnimationFrame(() => {
-                if (slot.isConnected && state.liked) slot.classList.add('pl-flash');
+                if (slot.isConnected && states.get(id) === state && state.liked) slot.classList.add('pl-flash');
             });
         });
+    }
+
+    async function getLikes(id, key, liked) {
+        if (telegramPreview) return telegramGame.likes(id,liked);
+        const {data,error} = await _supabase.rpc('profile_like_state',{
+            p_profile_id:id,p_browser_key:key,...(liked === undefined ? {} : { p_set:liked })
+        });
+        if (error || !data) throw error || new Error('Лайки пока недоступны');
+        return data;
     }
 
     async function readLikes(id,state,key) {
@@ -19103,10 +19116,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         state.loading = true;
         paintProfile(id,state);
         try {
-            const {data,error} = await _supabase.rpc('profile_like_state',{
-                p_profile_id:id,p_browser_key:key
-            });
-            if (error || !data) throw error;
+            const data = await getLikes(id,key);
             state.count = Number(data.count);
             state.liked = Boolean(data.liked);
             state.error = false;
@@ -19121,8 +19131,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     async function toggleLike(slot) {
         const id = slot.dataset.profileLike;
         const state = stateOf(id);
-        const key = browserKey();
-        if (!key || state.busy || state.loading || state.count === null) return;
+        const key = telegramPreview ? null : browserKey();
+        if (slot.dataset.canVote !== 'true' || (!telegramPreview && !key) || state.busy || state.loading || state.count === null) return;
         const previous = {count:state.count,liked:state.liked};
         state.busy = true;
         state.liked = !state.liked;
@@ -19130,10 +19140,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         if (!state.liked) slot.classList.remove('pl-flash');
         paintProfile(id,state,state.liked);
         try {
-            const {data,error} = await _supabase.rpc('profile_like_state',{
-                p_profile_id:id,p_browser_key:key,p_set:state.liked
-            });
-            if (error || !data) throw error;
+            const data = await getLikes(id,key,state.liked);
             state.count = Number(data.count);
             state.liked = Boolean(data.liked);
             state.at = Date.now();
@@ -19141,7 +19148,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         } catch {
             Object.assign(state,previous,{at:0});
             slot.classList.remove('pl-flash');
-            showToast('error','Лайк не сохранился','Попробуй ещё раз');
+            if (states.get(id) === state) showToast('error','Лайк не сохранился','Попробуй ещё раз');
         } finally {
             state.busy = false;
             paintProfile(id,state);
@@ -19151,8 +19158,10 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     function mount(slot) {
         if (!slot || slot.querySelector('.pl-total')) return;
         const id = slot.dataset.profileLike;
-        const key = slot.dataset.canVote === 'true' ? browserKey() : null;
-        slot.innerHTML = (key ?
+        if (telegramPreview && !telegramGame) return;
+        const key = !telegramPreview && slot.dataset.canVote === 'true' ? browserKey() : null;
+        const canVote = slot.dataset.canVote === 'true' && (telegramPreview || key);
+        slot.innerHTML = (canVote ?
             '<button class="pl-action" type="button" aria-label="Нравится профиль" aria-pressed="false" disabled>' +
                 heart + '<span class="pl-label">Нравится</span></button>' :
             '<div class="pl-action pl-readonly">' + heart + '<span>Лайки профиля</span></div>') +
@@ -19162,7 +19171,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         paint(slot,state);
         void readLikes(id,state,key);
     }
-    window.PROFILE_LIKES = {mount};
+    window.PROFILE_LIKES = {mount,clear:() => states.clear()};
     document.querySelectorAll('[data-profile-like]').forEach(mount);
 })();
 </script>
