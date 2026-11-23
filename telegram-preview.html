@@ -5333,10 +5333,11 @@ function updateMythicNumbers() {
 <style>
 .telegram-pending body > :not(#telegramEntryStatus) { visibility:hidden }
 .telegram-preview #profileScreen .profile-copy-id { display:none }
+.telegram-preview body > .top-nav { display:none }
 .telegram-fullscreen {
     --game-safe-top:max(env(safe-area-inset-top, 0px), calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)));
 }
-.telegram-fullscreen body > .top-nav { padding-top:calc(12px + var(--game-safe-top)) }
+.telegram-fullscreen body > .stats-bar { margin-top:var(--game-safe-top) }
 .telegram-fullscreen :is(#usernamesScreen,#collectionScreen,#ratingScreen,#checkScreen,#chancesScreen,
   #marketScreen,#profileScreen,#otherProfileScreen,#promoScreen,#gamesScreen,#upgradeGameScreen,
   #arScreen,#exScreen,#bpScreen,#bjScreen,#cardCollectionScreen,#cardShopScreen,#pvpScreen) {
