@@ -9649,7 +9649,8 @@ async function startTelegramPreview() {
         if (target.id === 'openRewardInbox' && telegramGame) return;
         if (target.dataset.cardAction === 'collection' && telegramGame) return;
         if (target.dataset.nx === 'open-card-shop' && telegramGame) return;
-        if (['filter','open','close-collection','close'].includes(target.dataset.cardAction)) return;
+        if (['filter','open','open-profile-card','close-collection','close'].includes(target.dataset.cardAction)) return;
+        if (['pin','sell'].includes(target.dataset.cardAction) && telegramGame?.canRoll()) return;
         if (userNameActions.has(target.dataset.uz)) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
         if (!target.closest('#menuSheet') && previewSafeActions.has(target.dataset.nx)) return;
@@ -9662,6 +9663,7 @@ async function startTelegramPreview() {
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
     let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer, originalProfile;
     let passCards = [], shopCards = [];
+    let cardVault = null, vaultRequest;
     let buying = false;
     let walletVersion = 0;
     let pendingRoll = null;
@@ -9709,8 +9711,26 @@ async function startTelegramPreview() {
     function renderTelegramCards() {
         const player = allPlayers.find(item => item.isMe);
         if (!player) return;
+        const writable = cardVault ? [...cardVault.owned,...passCards,...shopCards] : [];
+        const oldFlags = originalProfile?.cardFlags?.number_data;
+        const flags = cardVault ? { card_id:cardVault.cardId, sold:[...(Array.isArray(oldFlags?.sold) ? oldFlags.sold : []),...cardVault.sold] } : oldFlags;
         window.COLLECTOR_CARDS?.setTelegramCollection({ ...originalProfile, player,
-            cards:[...(originalProfile?.cards || []), ...shopCards, ...passCards] });
+            cards:[...(originalProfile?.cards || []), ...writable],
+            cardFlags:{number_data:flags}, writable, serverTime:cardVault?.serverTime });
+    }
+    async function refreshCardVault() {
+        if (readOnly) return;
+        const scope = walletScope, version = walletVersion;
+        if (vaultRequest?.scope === scope && vaultRequest.version === version) return vaultRequest.pending;
+        const pending = api({action:'card-vault'}).then(data => {
+            if (!readOnly && version === walletVersion) {
+                cardVault = data;
+                renderTelegramCards();
+            }
+        });
+        vaultRequest = {scope,version,pending};
+        try { await pending; }
+        finally { if (vaultRequest?.pending === pending) vaultRequest = null; }
     }
     function acceptPass(pass) {
         if (!pass) return;
@@ -9731,11 +9751,15 @@ async function startTelegramPreview() {
             ratingProfiles.clear();
             window.TELEGRAM_RATING?.clear();
             window.PROFILE_LIKES?.clear();
-            passCards = []; shopCards = []; freeRolls = 0;
+            passCards = []; shopCards = []; cardVault = null; freeRolls = 0;
             for (const key of Object.keys(luckBoost)) luckBoost[key] = 0;
             window.TELEGRAM_PASS?.clear();
         }
         walletScope = scope;
+        if (state.cardVault) {
+            cardVault = state.cardVault;
+            ratingProfiles.clear();
+        }
         const selected = currentRolledNumber?.id;
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
@@ -9765,6 +9789,7 @@ async function startTelegramPreview() {
             const imported = state?.walletScope === 'original' ? state : await api({ action: 'activate-original' });
             readOnly = false;
             renderState(imported);
+            void refreshCardVault().catch(() => {});
             notice.textContent = 'Прежний профиль подключён. Крутки и коллекция используют перенесённый баланс.';
             return;
         }
@@ -9780,9 +9805,12 @@ async function startTelegramPreview() {
     }
 
     async function store() {
+        const scope = walletScope;
         const data = await api({ action:'store' });
-        shopCards = data.owned || [];
-        renderTelegramCards();
+        if (scope === walletScope) {
+            shopCards = data.owned || [];
+            renderTelegramCards();
+        }
         return data;
     }
     async function passStatus() {
@@ -9801,6 +9829,7 @@ async function startTelegramPreview() {
         try {
             const state = await api({ action, ...fields });
             renderState(state);
+            if (action === 'buy-card') await refreshCardVault().catch(() => {});
             return state;
         } finally { buying = false; }
     }
@@ -9868,7 +9897,10 @@ async function startTelegramPreview() {
         const key = scope + ':' + id;
         let cached = ratingProfiles.get(key);
         if (!cached || Date.now() - cached.at > 30000) {
-            const pending = api({action:'rating-profile',profileId:id});
+            const pending = Promise.all([
+                api({action:'rating-profile',profileId:id}),
+                api({action:'card-profile',profileId:id}).catch(() => null)
+            ]).then(([profile,featured]) => ({...profile,profileCard:featured?.card || null}));
             cached = {at:Date.now(),pending};
             ratingProfiles.set(key,cached);
             try { await pending; }
@@ -9966,7 +9998,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, duel: api,
+        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, duel: api,
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
             likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
                 profileId:profileId === 'self' ? null : profileId, liked}),
@@ -9981,6 +10013,7 @@ async function startTelegramPreview() {
         if (profile.linked) await renderLinked(profile, state);
         else {
             renderState(state);
+            void refreshCardVault().catch(() => {});
             bind.hidden = false;
             notice.textContent = 'Предпросмотр Telegram. Крутка использует отдельный баланс мини-версии.';
         }
@@ -10163,7 +10196,8 @@ async function openOtherProfile(playerId, assets) {
     `;
     window.PROFILE_LIKES?.mount(document.querySelector('#identity-other [data-profile-like]'));
 
-    if (!telegramPreview) window.COLLECTOR_CARDS?.mount(p.id, true);
+    if (telegramPreview) window.COLLECTOR_CARDS?.setTelegramPublicCard(p.id, assets?.profileCard);
+    else window.COLLECTOR_CARDS?.mount(p.id, true);
 
     const screen = document.getElementById('otherProfileScreen');
     const simWrap = document.getElementById('otherMainSimWrap');
@@ -17761,7 +17795,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   let walletPending = false;
   const me = () => allPlayers.find(player => player.isMe);
   const issuedByPlayer = new Map();
-  const catalog = owner => [...cards, ...(issuedByPlayer.get(String(owner)) || [])];
+  const writableCards = new Set();
+  const catalog = owner => [...(telegramPreview ? [] : cards), ...(issuedByPlayer.get(String(owner)) || [])];
   const byId = (id, owner) => catalog(owner).find(card => card.id === id);
   const kind = 'profile_card';
   const grantKind = 'collector_card_grant';
@@ -17788,7 +17823,9 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   }
   // Один курс для всех игроков, рассчитанный по ID карточки и десятиминутному интервалу.
   const marketInterval = 10 * 60 * 1000;
-  function marketPrice(card, at = Date.now()) {
+  let marketOffset = 0, lastServerTime;
+  const marketNow = () => Date.now() + marketOffset;
+  function marketPrice(card, at = marketNow()) {
     const slot = Math.floor(at / marketInterval);
     let hash = 2166136261;
     for (const char of card.id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
@@ -17796,8 +17833,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const factor = 1 + .07 * Math.sin(slot * .23 + phase) + .025 * Math.sin(slot * .071 + phase * 1.7);
     return Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.round(card.price * factor)));
   }
-  const payout = (card, at = Date.now()) => Math.floor(marketPrice(card, at) / 2);
-  function priceChange(card, at = Date.now()) {
+  const payout = (card, at = marketNow()) => Math.floor(marketPrice(card, at) / 2);
+  function priceChange(card, at = marketNow()) {
     const now = marketPrice(card, at), before = marketPrice(card, at - marketInterval);
     return before ? (now - before) / before * 100 : 0;
   }
@@ -17807,10 +17844,10 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   let selectedRarity = 'all', searchTerm = '', sortMode = 'rarity', marketTimer = null, lastMarketSlot = 0;
   function startMarketUpdates() {
     if (marketTimer) return;
-    lastMarketSlot = Math.floor(Date.now() / marketInterval);
+    lastMarketSlot = Math.floor(marketNow() / marketInterval);
     marketTimer = setInterval(() => {
       if (document.hidden || (!vault.classList.contains('active') && !drawerOpen())) return;
-      const slot = Math.floor(Date.now() / marketInterval);
+      const slot = Math.floor(marketNow() / marketInterval);
       if (slot === lastMarketSlot) return;
       lastMarketSlot = slot;
       if (vault.classList.contains('active')) renderGrid();
@@ -17818,7 +17855,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     }, 15000);
   }
   function cardStatistics(card) {
-    const now = Date.now();
+    const now = marketNow();
     const end = Math.floor(now / marketInterval) * marketInterval;
     const released = Date.parse(card.release + 'T00:00:00Z');
     const start = Math.min(end, Math.max(end - 24 * 60 * 60 * 1000, Math.ceil(released / marketInterval) * marketInterval));
@@ -17993,7 +18030,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     return issuedCards(data || [], purchased.data || []);
   }
   function loadPlayer(id, force = false) {
-    if (telegramPreview) return force && id != null ? telegramGame?.store() || Promise.resolve() : Promise.resolve();
+    if (telegramPreview) return force && id != null ? telegramGame?.refreshCardVault() || Promise.resolve() : Promise.resolve();
     const key = String(id);
     if (reading.has(key)) return reading.get(key);
     if (writing.has(key) || (!force && Date.now() - (known.get(key)?.at || 0) < 30000)) return Promise.resolve();
@@ -18054,7 +18091,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const title = finishes[card.rarity].name;
     const info = (icon, label, value) => '<div class="urow"><span class="uic">' + X.ic(icon, 16) +
       '</span><div class="tx"><small>' + label + '</small><b>' + value + '</b></div></div>';
-    const own = !telegramPreview && key && key === String(me()?.id);
+    const own = key && key === String(me()?.id) && (!telegramPreview || telegramGame?.canRoll() && writableCards.has(card.id));
     const html = '<div class="cc-drawer uzd">' + X.drawerHead(title) + '<div class="cc-reveal">' + artwork(card, true) + '</div><div class="rows">' +
       info('coins', 'Цена карточки', '<span class="cc-estimate">' + money.format(marketPrice(card)) +
         ' ₽</span> <span class="cc-market-change' + (priceChange(card) < 0 ? ' down' : '') + '">' + changeLabel(priceChange(card)) + '</span>') +
@@ -18087,6 +18124,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   async function act(sell) {
     const player = me(), target = shown;
     if (!player || !target || !drawerOpen() || target.owner !== String(player.id) || writing.has(target.owner)) return;
+    if (telegramPreview && (!telegramGame?.canRoll() || !writableCards.has(target.card.id))) return;
     const key = target.owner, id = target.card.id, amount = payout(target.card);
     if (sell && !confirm('Продать «' + finishes[target.card.rarity].name + '» за ' + money.format(amount) + ' ₽?')) return;
     const remove = known.get(key)?.cardId === id;
@@ -18094,6 +18132,18 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     renderActions();
     report(target, sell ? 'Продаём карточку…' : 'Сохраняем…');
     try {
+      if (telegramPreview) {
+        const state = await telegramGame.trade(sell ? 'card-sell' : 'card-pin',
+          sell ? {cardId:id,expectedPayout:amount} : {cardId:id,pinned:!remove});
+        if (sell) {
+          if (drawerOpen() && shown === target) X.closeDrawer();
+          X.sfx.coin();
+          X.toast('Карточка продана · +' + money.format(state.credited) + ' ₽');
+        } else {
+          report(target, remove ? 'Карточка убрана из профиля.' : 'Карточка теперь видна в профиле.');
+        }
+        return;
+      }
       const changed = await changeCollection(player.id, state => {
         if (state.sold.includes(id)) return null;
         if (sell) return { cardId: state.cardId === id ? null : state.cardId, sold: [...state.sold, id] };
@@ -18114,6 +18164,21 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         X.fail('Карточка продана. Баланс сохранится при восстановлении связи.');
       }
     } catch (error) {
+      if (telegramPreview) {
+        if (error.status === 409) {
+          await telegramGame.refreshCardVault().catch(() => {});
+          if (drawerOpen() && shown === target) {
+            if (byId(id,key) && !known.get(key)?.sold.includes(id)) {
+              openCard(id,key);
+              report(shown,error.message,true);
+            } else {
+              X.closeDrawer();
+              X.fail('Карточка уже продана или недоступна.');
+            }
+          }
+        } else report(target,error.message || 'Попробуй ещё раз.',true);
+        return;
+      }
       console.warn('collector cards', error);
       report(target, 'Не удалось ' + (sell ? 'продать карточку' : 'сохранить выбор') + '. Попробуй ещё раз.', true);
     } finally {
@@ -18235,8 +18300,20 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     },
     setTelegramCollection(profile) {
       const key = String(profile.player.id);
+      if (Number.isFinite(profile.serverTime) && profile.serverTime !== lastServerTime) {
+        lastServerTime = profile.serverTime;
+        marketOffset = profile.serverTime - Date.now();
+      }
+      writableCards.clear();
+      for (const card of profile.writable || []) writableCards.add(card.custom_id);
       issuedByPlayer.set(key, issuedCards(profile.cardGrants || [], profile.cards || []));
       remember(key, profile.cardFlags);
+    },
+    setTelegramPublicCard(playerId, row) {
+      const key = String(playerId);
+      const issued = row ? issuedCards([], [row]) : [];
+      issuedByPlayer.set(key, issued);
+      remember(key, {number_data:{card_id:issued[0]?.id}});
     },
     passRewardArtwork(pid, season, level, track) {
       if (pid == null || !track || !level) return '';
