@@ -18350,6 +18350,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   function showBadge(slot, cardId) {
     const card = byId(cardId, slot.dataset.collectorPlayer);
     if (!card) {
+      if (slot.firstElementChild?.classList.contains('cc-badge')) return;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'cc-badge';
