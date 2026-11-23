@@ -9636,7 +9636,7 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -9665,6 +9665,7 @@ async function startTelegramPreview() {
     let walletVersion = 0;
     let pendingRoll = null;
     const pendingItems = new Map();
+    const ratingProfiles = new Map();
     async function api(body) {
         const response = await fetch(endpoint, {
             method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, cache: 'no-store',
@@ -9726,6 +9727,8 @@ async function startTelegramPreview() {
         walletVersion++;
         const scope = state.walletScope || 'preview';
         if (scope !== walletScope) {
+            ratingProfiles.clear();
+            window.TELEGRAM_RATING?.clear();
             passCards = []; shopCards = []; freeRolls = 0;
             for (const key of Object.keys(luckBoost)) luckBoost[key] = 0;
             window.TELEGRAM_PASS?.clear();
@@ -9834,6 +9837,48 @@ async function startTelegramPreview() {
             throw error;
         } finally { buying = false; }
     }
+    async function rating() {
+        const scope = walletScope;
+        const version = walletVersion;
+        const first = await api({action:'rating'});
+        const players = [...first.players];
+        for (let cursor = first.next; cursor;) {
+            const page = await api({action:'rating',after:cursor});
+            players.push(...page.players);
+            cursor = page.next;
+        }
+        if (scope !== walletScope) throw new Error('Профиль изменился. Открой рейтинг снова.');
+        if (!readOnly && version === walletVersion) {
+            const before = savedNumbers.filter(isTrophyNumber);
+            const owned = [...new Map(first.myTrophies.map(row => [row.formatted, row])).values()];
+            if (before.length !== owned.length || owned.some(row => !before.some(number => number.id === row.id))) {
+                savedNumbers = savedNumbers.filter(number => !isTrophyNumber(number)).concat(owned.map(rolledNumber));
+                updateCollection();
+                updateProfileUI();
+                if (profileDrawer.open) renderProfileSheet();
+                document.dispatchEvent(new Event('mythic-numbers-changed'));
+            }
+        }
+        return {players,season:first.season};
+    }
+    async function ratingProfile(id) {
+        const scope = walletScope;
+        const key = scope + ':' + id;
+        let cached = ratingProfiles.get(key);
+        if (!cached || Date.now() - cached.at > 30000) {
+            const pending = api({action:'rating-profile',profileId:id});
+            cached = {at:Date.now(),pending};
+            ratingProfiles.set(key,cached);
+            try { await pending; }
+            catch (error) {
+                if (ratingProfiles.get(key) === cached) ratingProfiles.delete(key);
+                throw error;
+            }
+        }
+        const profile = await cached.pending;
+        if (scope !== walletScope) throw new Error('Профиль изменился. Открой рейтинг снова.');
+        return profile;
+    }
     async function changeItems(action, numbers) {
         if (readOnly) throw new Error('Изменение прежней коллекции пока недоступно.');
         if (bindButton.disabled || buying) throw new Error('Дождись завершения текущей операции.');
@@ -9919,7 +9964,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -9933,6 +9978,7 @@ async function startTelegramPreview() {
             bind.hidden = false;
             notice.textContent = 'Предпросмотр Telegram. Крутка использует отдельный баланс мини-версии.';
         }
+        window.TELEGRAM_RATING?.warm();
     } catch (error) {
         notice.textContent = error.status ? error.message : 'Не удалось загрузить игру. Открой Mini App заново.';
     }
@@ -10031,6 +10077,14 @@ document.getElementById('otherNumbersList').addEventListener('click', event => {
     const row = event.target.closest('[data-other-number]');
     if (row) openOtherSheetById('number', row.dataset.otherNumber);
 });
+document.getElementById('otherHandles').addEventListener('click', event => {
+    const row = event.target.closest('[data-other-handle]');
+    if (row) openOtherSheetById('handle', row.dataset.otherHandle);
+});
+document.getElementById('otherProfileScreen').addEventListener('click', event => {
+    const button = event.target.closest('[data-other-copy]');
+    if (button) copyOtherUz(button.dataset.otherCopy);
+});
 
 function _bindTilt(el) {
     let raf = null, px = 0, py = 0;
@@ -10065,7 +10119,16 @@ function _otherToast(msg, ic = 'shield') {
 
 async function openOtherProfile(playerId, assets) {
     const request = ++otherProfileRequest;
-    let p = allPlayers.find(x => String(x.id) === String(playerId));
+    if (telegramPreview && !assets?.player) {
+        if (!telegramGame || !/^[0-9a-f-]{36}$/i.test(String(playerId))) return;
+        try { assets = await telegramGame.ratingProfile(playerId); }
+        catch (error) {
+            if (request === otherProfileRequest) showToast('error', error.message || 'Профиль недоступен', '');
+            return;
+        }
+        if (request !== otherProfileRequest) return;
+    }
+    let p = assets?.player || allPlayers.find(x => String(x.id) === String(playerId));
     if (!p) {
         const { data, error } = await _supabase.from('players').select('*').eq('id', playerId).single();
         if (request !== otherProfileRequest) return;
@@ -10077,24 +10140,24 @@ async function openOtherProfile(playerId, assets) {
     document.getElementById('identity-other').innerHTML = `
         <div class="id-top">
             <div class="avatar">
-                <div class="ph"><span class="fallback">${(p.name || 'И')[0].toUpperCase()}</span></div>
+                <div class="ph">${p.avatar_url ? `<img src="${escHtml(p.avatar_url)}" alt="" decoding="async">` : `<span class="fallback">${escHtml((p.name || 'И')[0].toUpperCase())}</span>`}</div>
                 <span class="dot" aria-hidden="true"></span>
             </div>
             <div class="id-main">
                 <div class="name-row"><h1>${escHtml(p.name || 'Игрок')}</h1><span data-collector-player="${escHtml(p.id)}"></span>${hasDevGift(p) ? devGiftBadge(true) : ''}</div>
                 ${tagList(p.tag).length ? `<div class="badge-row">${tagList(p.tag).map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${_pIcon('shield', 11)}${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}</div>` : ''}
                 <div class="meta-row">
-                    <button class="idchip num" onclick="copyOtherUz('${p.id}')" aria-label="Скопировать ID">ID: ${p.id} ${_pIcon('copy', 13)}</button>
+                    <button class="idchip num" data-other-copy="${escHtml(p.id)}" aria-label="Скопировать ID">ID: ${escHtml(p.id)} ${_pIcon('copy', 13)}</button>
                     <span class="online"><i></i>онлайн</span>
                 </div>
                 <div class="since">В игре с ${p.created_at ? new Date(p.created_at).toLocaleDateString('ru-RU') : '—'}</div>
             </div>
         </div>
-        <div class="profile-likes" data-profile-like="${escHtml(p.id)}" data-can-vote="${allPlayers.some(player => player.isMe && String(player.id) !== String(p.id))}"></div>
+        ${telegramPreview ? '' : `<div class="profile-likes" data-profile-like="${escHtml(p.id)}" data-can-vote="${allPlayers.some(player => player.isMe && String(player.id) !== String(p.id))}"></div>`}
     `;
     window.PROFILE_LIKES?.mount(document.querySelector('#identity-other [data-profile-like]'));
 
-    window.COLLECTOR_CARDS?.mount(p.id, true);
+    if (!telegramPreview) window.COLLECTOR_CARDS?.mount(p.id, true);
 
     const screen = document.getElementById('otherProfileScreen');
     const simWrap = document.getElementById('otherMainSimWrap');
@@ -10147,7 +10210,7 @@ async function openOtherProfile(playerId, assets) {
         simWrap.style.setProperty('--glow', 'transparent');
         simWrap.innerHTML = profileCardHTML({
             formatted: mainNumber.formatted, op: mainNumber.op_name || 'SECRET', rarity: mainNumber.rarity, price: mainNumber.price, exc: mainNumber.exc, uid: mainNumber.unique_id,
-            actions: `<button class="ibtn" onclick="copyOtherUz('${escHtml(mainNumber.formatted)}')" aria-label="Скопировать номер">${_pIcon('copy', 16)}</button>`
+            actions: `<button class="ibtn" data-other-copy="${escHtml(mainNumber.formatted)}" aria-label="Скопировать номер">${_pIcon('copy', 16)}</button>`
         });
         bindProfileCard(simWrap);
     }
@@ -10168,7 +10231,7 @@ async function openOtherProfile(playerId, assets) {
             const rKey = calculateUzRarity(u.name);
             const color = PRARITIES[rKey]?.color || '#A7B1C7';
             const isPin = pinned.includes(u);
-            return `<button class="hchip ${isPin ? 'pinned' : ''}" style="--c:${color}" onclick="openOtherSheetById('handle', ${Number(u.id)})" aria-label="Открыть ${escHtml(u.name)}">
+            return `<button class="hchip ${isPin ? 'pinned' : ''}" style="--c:${color}" data-other-handle="${escHtml(u.id)}" aria-label="Открыть ${escHtml(u.name)}">
                 ${isPin ? '<span style="color:#FFB020">★</span>' : _pIcon('send', 14)}${escHtml(u.name)}<i aria-hidden="true"></i>
             </button>`;
         }).join('');
@@ -10252,7 +10315,7 @@ function openOtherSheetById(type, id) {
 
     const sub = isHandle
         ? `<span>${_pIcon('hash', 13)}${asset.name.replace('@', '').length} ${['символ','символа','символов'][((asset.name.replace('@','').length % 100 > 4 && asset.name.replace('@','').length % 100 < 20) ? 2 : [2,0,1,1,1,2][Math.min(asset.name.replace('@','').length % 10, 5)])]}</span><span>${_pIcon('shield', 13)}Активен</span>`
-        : `<span>${_pIcon('globe', 13)}Россия</span><span>${_pIcon('sim', 13)}${asset.op_name || 'SECRET'}</span><span>${_pIcon('shield', 13)}Активен</span>`;
+        : `<span>${_pIcon('sim', 13)}${escHtml(asset.op_name || 'SECRET')}</span><span>${_pIcon('shield', 13)}Активен</span>`;
     const priceHtml = isHandle
         ? `<div class="price-big num">${_pFormat(asset.price)}<small>кристаллов</small></div>`
         : `<div class="price-big num">${_money(asset.price)}</div>`;
@@ -10270,7 +10333,7 @@ function openOtherSheetById(type, id) {
         </div>
         <div class="asset-hero" style="--c:${r.color}">
             <div class="asset-kicker">${kicker}</div>
-            <h3 class="asset-title num ${isHandle ? 'handle' : ''}">${title}</h3>
+            <h3 class="asset-title num ${isHandle ? 'handle' : ''}">${escHtml(title)}</h3>
             <div class="asset-sub">${sub}</div>
         </div>
         <div class="cert" style="--c:${r.color}">
@@ -10280,9 +10343,9 @@ function openOtherSheetById(type, id) {
                 <div class="cert-main">
                     <span class="cert-label">Владелец</span>
                     <div class="owner-mini">
-                        <span class="mini-ava">${(p.name || 'И')[0].toUpperCase()}</span>
-                        <b>${p.name || 'Игрок'}</b>
-                        <span class="mini-id num">ID: ${p.id}</span>
+                        <span class="mini-ava">${escHtml((p.name || 'И')[0].toUpperCase())}</span>
+                        <b>${escHtml(p.name || 'Игрок')}</b>
+                        <span class="mini-id num">ID: ${escHtml(p.id)}</span>
                         ${tagList(p.tag).map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}
                     </div>
                 </div>
@@ -13104,6 +13167,12 @@ RT.query = '';
 const savePrefs = () => LS.set('rt_prefs', { tab: RT.tab, sort: RT.sort, filter: RT.filter });
 let DATA = [], BASE = null, loading = null, loadedOnce = false;
 let ratingNumbersComplete = false, ratingUsernamesComplete = false;
+let ratingError = false, ratingGeneration = 0;
+window.TELEGRAM_RATING = { clear() {
+  ratingGeneration++;
+  DATA = []; BASE = null; loadedOnce = false; mythicOwners = null; ratingError = false;
+  ratingMarkup.clear();
+}, warm() { setTimeout(() => { if (!loadedOnce) void load().catch(() => {}); }, 500); } };
 const MYTHIC_ICONS = { balance:'coins', collection:'layers', pvp:'trophy' };
 const rtOpen = () => $('#ratingScreen').classList.contains('active');
 const ratingMarkup = new Map();
@@ -13140,6 +13209,8 @@ const ratingSecret = n => n.rarity === 'secret' && !n.exc;
 const hasSecret = p => p.assets.secret.count > 0;
 const currentAssets = p => RATING_ASSETS[RT.filter] ? p.assets[RT.filter] : null;
 const ratingValue = p => currentAssets(p)?.total ?? value(p);
+const ratingNumbers = p => p.numberCount ?? p.numbers.length;
+const ratingUsernames = p => p.usernameCount ?? p.uz.length;
 function ratingAmount(p) {
   const category = RATING_ASSETS[RT.filter];
   if (!category) return money(value(p));
@@ -13168,19 +13239,47 @@ function ranksBy(fn) { const m = {}; DATA.slice().sort((a, b) => fn(b) - fn(a)).
 // «Рост за сутки» и стрелки мест считаются относительно вчерашнего снимка рейтинга на этом устройстве
 function snapshot() {
   const day = new Date().toLocaleDateString('sv');
-  let snaps = LS.get('rt_snaps', []); if (!Array.isArray(snaps)) snaps = [];
+  const scope = telegramPreview ? (telegramGame?.canPurchase() ? '_tg_original' : '_tg_preview') : '';
+  const key = 'rt_snaps' + scope;
+  let snaps = LS.get(key, []); if (!Array.isArray(snaps)) snaps = [];
   if (!snaps.some(s => s.day === day)) {
     snaps.push({ day, cap: Object.fromEntries(DATA.map(p => [p.id, capital(p)])), rich: ranksBy(capital), best: ranksBy(p => best(p) ? best(p).price : 0) });
-    snaps = snaps.slice(-3); LS.set('rt_snaps', snaps);
+    snaps = snaps.slice(-3); LS.set(key, snaps);
   }
   BASE = snaps.filter(s => s.day < day).pop() || null;
 }
 const growth = p => { const b = BASE && BASE.cap[p.id]; return b ? (capital(p) - b) / b * 100 : null; };
 const prevRank = p => BASE ? (RT.tab === 'best' ? BASE.best : BASE.rich)[p.id] : null;
 
+async function loadTelegramRating() {
+  if (!telegramGame) throw new Error('Открой игру заново из Telegram.');
+  const generation = ratingGeneration;
+  const {players,season} = await telegramGame.rating();
+  if (generation !== ratingGeneration) return;
+  mythicOwners = season;
+  DATA = players.map(p => {
+    const numbers = p.numbers.map(n => ({...n,price:Number(n.price)||0,
+      exc:window.EXC && !reactorLegacySecret(n) && parseExcCfg(n.unique_id) ? EXC.parse(n.unique_id) : null}));
+    const uz = p.usernames.map(u => ({...u,price:Number(u.price)||0,
+      history:Array.isArray(u.history) ? u.history.map(Number).filter(Number.isFinite) : [],
+      boughtAt:u.bought_at ? new Date(u.bought_at).getTime() : null}));
+    const wallet = Number(p.balance)||0, usernameCount = Number(p.username_count)||0, numberCount = Number(p.number_count)||0;
+    const usernameTotal = Number(p.username_total)||0, wins = Number(p.pvp_wins)||0;
+    const assets = {
+      uz:{count:usernameCount,total:usernameTotal,featured:uz[0]?.name || ''},
+      secret:{count:Number(p.secret_count)||0,total:Number(p.secret_total)||0,featured:p.secret_featured || ''},
+      balance:{total:wallet,count:numberCount},pvp:{total:wins,count:wins}
+    };
+    return {id:p.id,name:p.name||'Игрок',tag:p.tag,me:p.isMe,avatar:p.avatar_url,devGift:hasDevGift(p),
+      created:p.created_at,main_uz:p.main_uz,second_uz:p.second_uz,balance:wallet,numbers,uz,assets,numberCount,usernameCount,
+      capital:wallet+(Number(p.number_total)||0)+usernameTotal*100,bestNumber:numbers.find(n => !isTrophyNumber(n)) || null};
+  });
+  snapshot(); loadedOnce = true;
+}
 async function load() {
   if (loading) return loading;
   loading = (async () => {
+    if (telegramPreview) { await loadTelegramRating(); return; }
     const [pr, nr, ur, trophies] = await Promise.all([
       _supabase.from('players').select('*'),
       _supabase.from('player_numbers').select('*', { count: 'exact' }),
@@ -13227,13 +13326,13 @@ function ranked(list) {
   return list.slice().sort((a, b) => {
     if (RT.sort === 'name') return a.name.localeCompare(b.name, 'ru');
     if (RT.sort === 'growth') return (growth(b) ?? -1e9) - (growth(a) ?? -1e9);
-    if (RT.sort === 'numbers') return (currentAssets(b)?.count ?? b.numbers.length) - (currentAssets(a)?.count ?? a.numbers.length) || ratingValue(b) - ratingValue(a);
+    if (RT.sort === 'numbers') return (currentAssets(b)?.count ?? ratingNumbers(b)) - (currentAssets(a)?.count ?? ratingNumbers(a)) || ratingValue(b) - ratingValue(a);
     return ratingValue(b) - ratingValue(a);
   });
 }
 function filtered() {
   let arr = DATA;
-  if (RT.filter === 'uz') arr = arr.filter(p => p.uz.length);
+  if (RT.filter === 'uz') arr = arr.filter(p => ratingUsernames(p));
   else if (RT.filter === 'secret') arr = arr.filter(hasSecret);
   else if (RT.filter === 'pvp') arr = arr.filter(p => p.assets.pvp.count > 0);
   else if (RT.filter === 'top') arr = DATA.slice().sort((a, b) => value(b) - value(a)).slice(0, 10);
@@ -13266,7 +13365,8 @@ function subline(p) {
     return `${count}${assets.featured ? ` · <span class="rt-asset-name">${esc(assets.featured)}</span>` : ''}`;
   }
   if (RT.tab === 'best') { const b = best(p); if (!b) return 'нет номеров'; const r = numRar(b); return `<span class="num-txt" style="color:${r.color}">${esc(numLabel(b))}</span> · ${r.label}`; }
-  return `${p.numbers.length} ${plural(p.numbers.length, 'номер', 'номера', 'номеров')} · ${p.uz.length} ${plural(p.uz.length, 'юз', 'юза', 'юзов')}`;
+  const numbers = ratingNumbers(p), usernames = ratingUsernames(p);
+  return `${numbers} ${plural(numbers, 'номер', 'номера', 'номеров')} · ${usernames} ${plural(usernames, 'юз', 'юза', 'юзов')}`;
 }
 function render() {
   if (!rtOpen()) return;
@@ -13286,9 +13386,10 @@ function render() {
   const description = category?.description ?? (RT.tab === 'rich' ? 'Капитал: <b>баланс</b> + оценка номеров и юзов (×100). Трофеи исключены из оценки.' : 'У кого самый дорогой номер в коллекции. Оценка зависит от <b>редкости</b> и рисунка цифр.');
   paintRating('#rtDesc', description + (RT.filter === 'pvp' ? ' <button type="button" class="rt-pvp-link" data-pvp="open">На арену</button>' : ''));
   const trophyCards = Object.entries(MYTHIC_NUMBERS).map(([number, info]) => {
-    const holder = mythicOwners?.find(row => row.formatted === number)?.player_id;
+    const trophy = mythicOwners?.find(row => row.formatted === number);
+    const holder = trophy?.player_id;
     const player = holder == null ? null : DATA.find(p => String(p.id) === String(holder));
-    const label = player?.name || (holder != null ? 'Игрок #' + holder : (mythicOwners ? 'Свободен' : '—'));
+    const label = player?.name || trophy?.holder_name || (holder != null ? 'Игрок #' + holder : (mythicOwners ? 'Свободен' : '—'));
     return `<li class="rt-mythic-tile" style="--mythic-color:${info.color}">
       <span class="rt-mythic-icon" aria-hidden="true">${ic(MYTHIC_ICONS[info.type], 19)}</span>
       <div class="rt-mythic-details">
@@ -13303,14 +13404,18 @@ function render() {
   }).join('');
   paintRating('#rtMythics', trophyCards);
   $('#rtSort').innerHTML = ic('sort', 15) + '<span>' + esc(ratingSortLabel()) + '</span>';
-  const counts = { all: DATA.length, balance: DATA.length, uz: DATA.filter(p => p.uz.length).length, pvp: DATA.filter(p => p.assets.pvp.count > 0).length, secret: DATA.filter(hasSecret).length, top: Math.min(10, DATA.length) };
+  const counts = { all: DATA.length, balance: DATA.length, uz: DATA.filter(p => ratingUsernames(p)).length, pvp: DATA.filter(p => p.assets.pvp.count > 0).length, secret: DATA.filter(hasSecret).length, top: Math.min(10, DATA.length) };
   for (const chip of $('#rtChips').children) {
     const selected = chip.dataset.f === RT.filter;
     chip.classList.toggle('on', selected);
     chip.setAttribute('aria-pressed', String(selected));
     chip.lastElementChild.textContent = loadedOnce ? counts[chip.dataset.f] : '—';
   }
-  if (!loadedOnce) { paintRating('#rtList', `<div class="rt-empty">${ic('users', 34)}<b>Загружаем рейтинг…</b></div>`); return; }
+  if (!loadedOnce) {
+    paintRating('#rtMy',''); paintRating('#rtPodium',''); paintRating('#rtFilterInfo','');
+    paintRating('#rtList', `<div class="rt-empty">${ic('users', 34)}<b>${ratingError ? 'Рейтинг недоступен' : 'Загружаем рейтинг…'}</b>${ratingError ? '<button class="rt-sortbtn" data-rt="refresh">Повторить</button>' : ''}</div>`);
+    return;
+  }
   const list = filtered(), me = DATA.find(p => p.me), idx = list.indexOf(me);
   const filter = FILTERS.find(f => f.id === RT.filter);
   paintRating('#rtFilterInfo', `${filter.label} · ${list.length} ${plural(list.length, 'игрок', 'игрока', 'игроков')}`);
@@ -13331,7 +13436,7 @@ function render() {
     pod.style.display = 'grid';
     const order = [list[1], list[0], list[2]], cls = ['p2', 'p1', 'p3'], rings = ['#CBD4CE', '#E7BC55', '#D08F52'];
     paintRating('#rtPodium', order.map((p, i) => { const place = i === 1 ? 1 : i === 0 ? 2 : 3;
-      return `<button class="pod ${cls[i]}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}">${p === leader ? `<span class="crown">${ic('crown', 22)}</span>` : ''}<span class="podplace">${place}</span>${ava(p, 44, rings[i])}<span class="podname">${rankName(p)}</span><span class="podval">${ratingAmount(p)}</span><span class="podsub">${category ? subline(p) : RT.tab === 'best' ? (best(p) ? numRar(best(p)).label : '—') : p.numbers.length + ' ' + plural(p.numbers.length, 'номер', 'номера', 'номеров')}</span></button>`; }).join(''));
+      return `<button class="pod ${cls[i]}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}">${p === leader ? `<span class="crown">${ic('crown', 22)}</span>` : ''}<span class="podplace">${place}</span>${ava(p, 44, rings[i])}<span class="podname">${rankName(p)}</span><span class="podval">${ratingAmount(p)}</span><span class="podsub">${category ? subline(p) : RT.tab === 'best' ? (best(p) ? numRar(best(p)).label : '—') : ratingNumbers(p) + ' ' + plural(ratingNumbers(p), 'номер', 'номера', 'номеров')}</span></button>`; }).join(''));
   }
   const offset = noPod ? 0 : 3;
   paintRating('#rtList', list.length ? list.slice(offset).map((p, i) => { const rank = offset + i + 1;
@@ -13367,6 +13472,7 @@ function openPlayerUz(pid, name) {
 }
 function openPlayer(id) {
   const p = DATA.find(x => String(x.id) === String(id)); if (!p) return;
+  if (telegramPreview) void telegramGame.ratingProfile(p.id).catch(() => {});
   const ranking = RATING_ASSETS[RT.filter] ? filtered() : DATA.slice().sort((a, b) => value(b) - value(a));
   const rank = ranking.indexOf(p) + 1, b = best(p), tags = tagList(p.tag);
   const badge = (label, c, icon) => `<span class="rt-badge" style="--c:${c};--cb:${rgba(c, .13)};--cl:${rgba(c, .4)}">${ic(icon, 11)}${esc(label)}</span>`;
@@ -13385,14 +13491,14 @@ function openPlayer(id) {
       <div class="pstat g"><small>Капитал</small><b>${money(capital(p))}</b></div>
       <div class="pstat"><small>Баланс</small><b>${money(p.balance)}</b></div>
       <div class="pstat"><small>Рост за сутки</small><b style="color:${g == null ? 'var(--faint)' : g >= 0 ? 'var(--ok)' : 'var(--danger)'}">${g == null ? '—' : (g >= 0 ? '+' : '') + g.toFixed(1).replace('.', ',') + '%'}</b></div>
-      <div class="pstat"><small>Номеров</small><b>${p.numbers.length}</b></div>
-      <div class="pstat c"><small>Юзов</small><b>${p.uz.length}</b></div>
-      <div class="pstat"><small>Оценка юзов</small><b>${fmt(p.uz.reduce((s, u) => s + u.price, 0))} ◆</b></div>
+      <div class="pstat"><small>Номеров</small><b>${ratingNumbers(p)}</b></div>
+      <div class="pstat c"><small>Юзов</small><b>${ratingUsernames(p)}</b></div>
+      <div class="pstat"><small>Оценка юзов</small><b>${fmt(p.assets.uz.total)} ◆</b></div>
     </div>
     ${b ? `<div class="sec">${ic('trophy', 16)}<h5>Лучший номер</h5><span>${numRar(b).label}</span></div><div class="bestcard">${profileCardHTML({ formatted: b.formatted, op: b.op_name || 'SECRET', rarity: b.rarity, price: b.price, exc: b.exc, uid: b.unique_id })}</div>` : ''}
     ${uzs.length ? `<div class="sec">${ic('send', 16)}<h5>Telegram-юзы</h5><span>${uzs.length}</span></div><div class="uzs">${uzs.map(u => { const c = (PRARITIES[calculateUzRarity(u.name)] || PRARITIES.common).color; return `<button class="uzc" style="--c:${c}" data-rt="uz" data-id="${p.id}" data-name="${esc(u.name)}"><i></i>${pins.includes(u.name) ? '★ ' : ''}${esc(u.name)}<small>${fmt(u.price)} ◆</small>${ic('back', 12).replace('<svg', '<svg style="transform:rotate(180deg)"')}</button>`; }).join('')}</div>` : ''}
     ${nums.length ? `<section class="rt-top-numbers" aria-label="Самые дорогие номера">
-      <div class="sec">${ic('layers', 16)}<h5>Топ номеров</h5><span>${p.numbers.length} всего</span></div>
+      <div class="sec">${ic('layers', 16)}<h5>Топ номеров</h5><span>${ratingNumbers(p)} всего</span></div>
       <ol class="rt-number-list">${nums.map(profileRatingNumber).join('')}</ol>
     </section>` : ''}
     <div class="dactions"><button class="btn" data-rt="copy-id" data-id="${p.id}">${ic('copy', 15)}Скопировать ID</button><button class="btn primary" data-rt="full" data-id="${p.id}">${ic('eye', 15)}Открыть профиль</button></div></div>`;
@@ -13423,12 +13529,13 @@ async function refresh(manual) {
   const meBefore = DATA.find(p => p.me), was = meBefore ? DATA.slice().sort((a, b) => value(b) - value(a)).indexOf(meBefore) + 1 : 0;
   try {
     await load();
+    ratingError = false;
     if (manual) render();
     else paintRatingWhenIdle();
     const me = DATA.find(p => p.me), now = me ? DATA.slice().sort((a, b) => value(b) - value(a)).indexOf(me) + 1 : 0;
     if (!RATING_ASSETS[RT.filter] && was && now && now < was) { X.sfx.win(); X.toast(`Вы поднялись на ${now} место`); }
     else if (manual) { X.sfx.ok(); X.toast('Рейтинг обновлён'); }
-  } catch (e) { if (manual) X.fail('Не удалось обновить: ' + esc(e.message || e)); }
+  } catch (e) { ratingError = true; render(); if (manual) X.fail('Не удалось обновить: ' + esc(e.message || e)); }
   finally { refreshing = false; }
 }
 function updateJump() {
@@ -13496,7 +13603,7 @@ $('#ratingScreen').addEventListener('scroll', () => {
   if (sraf) return;
   sraf = requestAnimationFrame(() => { sraf = null; updateJump(); });
 }, { passive: true });
-document.addEventListener('click', e => {
+document.addEventListener('click', async e => {
   const t = e.target.closest('[data-rt]'); if (!t) return;
   const a = t.dataset.rt;
   if (a === 'close') closeRating();
@@ -13511,6 +13618,19 @@ document.addEventListener('click', e => {
   else if (a === 'uz-buy') { X.closeDrawer(); if (window.NXScreens) NXScreens.confirmBuy(t.dataset.id); }
   else if (a === 'full') {
     const p = DATA.find(player => String(player.id) === t.dataset.id);
+    if (telegramPreview) {
+      if (!p || t.disabled) return;
+      t.disabled = true;
+      try {
+        const assets = await telegramGame.ratingProfile(p.id);
+        const current = X.drawerCtx();
+        if (current?.owner !== 'rt' || String(current.id) !== t.dataset.id || !t.isConnected) return;
+        X.closeDrawer();
+        await openOtherProfile(p.id, assets);
+      } catch (error) { X.fail(esc(error.message || 'Профиль недоступен')); }
+      finally { t.disabled = false; }
+      return;
+    }
     X.closeDrawer();
     openOtherProfile(t.dataset.id, {
       numbers: ratingNumbersComplete ? p?.numbers : undefined,
