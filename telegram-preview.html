@@ -9771,9 +9771,10 @@ async function startTelegramPreview() {
     }
     async function auction() {
         const version = walletVersion;
+        const { lots: rentals } = await api({ action:'rentals' });
         const { lots, state } = await api({ action:'auction' });
         if (state && version === walletVersion && !readOnly && !buying && !isRolling && !rollActionBusy) renderState(state);
-        return lots;
+        return [...lots, ...rentals];
     }
 
     async function trade(action, fields) {
@@ -12359,7 +12360,13 @@ function passiveTick() {
   });
   if (add > 0) { X.addMoney('rub', add); X.toast(`Пассивный доход аренды · +${X.money(add)}`); }
 }
-const passiveEarned = id => { try { return (JSON.parse(localStorage.getItem('ar_pas_' + id)) || {}).earned || 0; } catch (e) { return 0; } };
+const passiveEarned = id => {
+  if (telegramPreview) {
+    const offer = offers.find(row => same(row.id, id));
+    return Number(D(offer || {}).passiveEarned) || 0;
+  }
+  try { return (JSON.parse(localStorage.getItem('ar_pas_' + id)) || {}).earned || 0; } catch (e) { return 0; }
+};
 
 /* ─── действия игрока ─── */
 async function placeBid(id, amount, isBuyout) {
@@ -12421,6 +12428,14 @@ async function rent(id) {
   const d = D(r), cur = curOf(r), days = Math.min(ST.rentDays, d.maxDays), total = d.pricePerDay * days, me = X.me();
   if (d.state !== 'open') { X.fail('Предложение уже занято'); return; }
   if (X.funds(cur) < total) { X.fail('Нужно ' + price(total, cur) + ' для аренды'); return; }
+  if (telegramPreview) {
+    const outcome = await telegramGame.trade('rent-start', {lotId:id,days});
+    ST.tab = 'rental'; ST.sub = 'in'; savePrefs();
+    X.closeDrawer(); X.sfx.rent();
+    X.toast('Аренда действует до ' + new Date(outcome.endsAt).toLocaleDateString('ru-RU'));
+    await refresh();
+    return;
+  }
   const res = await mutate(r, x => { if (x.state !== 'open') return false; Object.assign(x, { state: 'rented', renter: { pid: me.id, name: myName() }, days, startsAt: now(), endsAt: now() + days * DAY, totalPaid: total, ownerPaid: false, refundDue: 0, refunded: false, returned: false }); return {}; });
   if (!res.ok) { X.fail(res.abort ? 'Предложение уже арендовали' : mutErr(res)); await refresh(); return; }
   X.addMoney(cur, -total);
@@ -12430,6 +12445,12 @@ async function rent(id) {
 }
 async function cancelOffer(id) {
   const r = offers.find(x => same(x.id, id)); if (!r || !mine(r)) return;
+  if (telegramPreview) {
+    await telegramGame.trade('rent-cancel', {lotId:id});
+    X.closeDrawer(); X.sfx.tick(); X.toast('Предложение снято, актив вернулся в коллекцию');
+    await refresh();
+    return;
+  }
   const res = await mutate(r, x => { if (x.state !== 'open') return false; x.state = 'cancelled'; x.returned = true; return { fields: { status: 'sold' } }; });
   if (!res.ok) { X.fail(res.abort ? 'Предмет уже арендовали' : mutErr(res)); await refresh(); return; }
   await safeGive(typeOf(r), D(r).item, itemName(r));
@@ -12443,6 +12464,12 @@ async function terminate(id) {
   const pending = d.ownerPaid ? 0 : Math.round((d.totalPaid || 0) * (1 - RENT_FEE));
   if (X.funds(cur) + pending < refund) { X.fail('Не хватает средств на возврат ' + price(refund, cur)); return; }
   if (!confirm(`Расторгнуть аренду? Арендатор получит назад ${price(refund, cur)}.`)) return;
+  if (telegramPreview) {
+    const outcome = await telegramGame.trade('rent-terminate', {lotId:id});
+    X.closeDrawer(); X.sfx.tick(); X.toast('Аренда расторгнута · возврат ' + price(outcome.refund, cur));
+    await refresh();
+    return;
+  }
   let payout = 0;
   const res = await mutate(r, x => { if (x.state !== 'rented') return false; payout = x.ownerPaid ? 0 : Math.round((x.totalPaid || 0) * (1 - RENT_FEE)); x.ownerPaid = true; x.state = 'terminated'; x.refundDue = refund; x.returned = true; return {}; });
   if (!res.ok) { X.fail(mutErr(res)); await refresh(); return; }
@@ -12484,6 +12511,14 @@ async function createOffer() {
   if (type === 'number' && isTrophyNumber(src)) { X.fail('Номер-Миф нельзя передать'); return; }
   const ppd = Math.floor(Number($('#arRPrice').value) || 0), md = clamp(Number($('#arRMax').value) || 7, 1, 30);
   if (ppd < 1) { X.fail('Укажи цену за день'); return; }
+  if (telegramPreview) {
+    await telegramGame.trade('rent-create', {assetId:src.id,assetKind:type === 'number' ? 'number' : 'username',
+      pricePerDay:ppd,maxDays:md});
+    ST.tab = 'rental'; ST.sub = 'out'; savePrefs();
+    X.closeDrawer(); X.sfx.rent(); X.toast('Актив выставлен в аренду');
+    await refresh();
+    return;
+  }
   const m = X.me(), item = type === 'number' ? numItem(src) : uzItem(src);
   const row = { seller_id: m.id, type: type === 'number' ? 'number' : 'nick', price: ppd,
     number_data: { kind: 'rent', v: 1, item, pricePerDay: ppd, maxDays: md, state: 'open', ownerName: myName(), createdAt: now() } };
@@ -12609,15 +12644,15 @@ function render() {
   renderTop();
   $('#arStats').innerHTML = `<div class="stat g"><small>Аукционов</small><b class="num">${act.length}</b></div>
     <div class="stat o"><small>Вы лидируете</small><b class="num">${act.filter(r => { const l = lastBid(D(r)); return l && same(l.pid, me); }).length}</b></div>
-    ${telegramPreview ? '' : `<div class="stat t"><small>Активных аренд</small><b class="num">${offers.filter(r => D(r).state === 'rented').length}</b></div>`}
-    <div class="stat"><small>Комиссия</small><b class="num">${telegramPreview ? '5%' : '5% / 10%'}</b></div>`;
+    <div class="stat t"><small>Активных аренд</small><b class="num">${offers.filter(r => D(r).state === 'rented').length}</b></div>
+    <div class="stat"><small>Комиссия</small><b class="num">5% / 10%</b></div>`;
   renderTicker();
   const lots = regLots();
   const tabs = [
     { id: 'all', label: 'Все', cnt: lots.length }, { id: 'numbers', label: 'Номера', cnt: lots.filter(l => l.type === 'number').length },
     { id: 'uz', label: 'Юзы', cnt: lots.filter(l => l.type !== 'number').length }, { id: 'my', label: 'Мои', cnt: lots.filter(l => l.isMine).length },
     { id: 'auction', label: 'Аукцион', cnt: act.length },
-    ...(telegramPreview ? [] : [{ id: 'rental', label: 'Аренда', cnt: offers.filter(r => D(r).state === 'open' || (D(r).state === 'rented' && (mine(r) || (D(r).renter && same(D(r).renter.pid, me))))).length }])
+    { id: 'rental', label: 'Аренда', cnt: offers.filter(r => D(r).state === 'open' || (D(r).state === 'rented' && (mine(r) || (D(r).renter && same(D(r).renter.pid, me))))).length }
   ];
   if (!tabs.some(t => t.id === ST.tab)) ST.tab = 'auction';
   $('#arTabs').innerHTML = tabs.map(t => `<button class="${ST.tab === t.id ? 'on' : ''}" data-ar="tab" data-tab="${t.id}">${t.label}<span class="cnt num">${t.cnt}</span></button>`).join('');
@@ -12805,11 +12840,6 @@ function tick() {
 window.openAuction = function () {
   if (telegramPreview && !telegramGame) { X.fail('Дождись входа через Telegram'); return; }
   ST.selMode = false; ST.sel = {};
-  if (telegramPreview) {
-    ST.tab = 'auction';
-    const rentalButton = $('#arScreen [data-ar="new-offer"]');
-    if (rentalButton) rentalButton.style.display = 'none';
-  }
   X.openScreen('arScreen'); parse(); render(); refresh();
   clearInterval(tickT); tickT = setInterval(tick, 1000);
   clearInterval(pollT); pollT = setInterval(() => { if (!document.hidden) refresh(); }, 12000);
@@ -12828,7 +12858,6 @@ setInterval(() => { if (!document.hidden && X.me() && !isOpen()) refresh(); }, 6
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-ar]'); if (!t) return;
   const a = t.dataset.ar, id = t.dataset.id;
-  if (telegramPreview && ['new-offer','create-offer','rent','cancel-offer','terminate','offer','rental'].includes(a)) return;
   switch (a) {
     case 'close': closeAuction(); break;
     case 'noop': break;
