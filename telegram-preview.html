@@ -9761,6 +9761,7 @@ async function startTelegramPreview() {
     const launchCheck = document.getElementById('testLaunchCheck');
     const launchDigits = launchPanel.querySelectorAll('.test-launch-clock b');
     let launchDeadline = 0, launchClockOffset = 0, launchTickTimer, launchPollTimer, launchEndTimer;
+    let resumeAfterCountdown = false;
     document.getElementById('roamButton').disabled = true;
     document.getElementById('tariffButton').disabled = true;
     updateRoamingLabel();
@@ -9833,6 +9834,12 @@ async function startTelegramPreview() {
             clearTimeout(timeout);
         }
         if (response.ok && result) return result;
+        if (response.status === 423 && result?.launch && entry.hidden) {
+            resumeAfterCountdown = true;
+            document.documentElement.classList.add('telegram-pending');
+            entry.hidden = false;
+            showLaunchCountdown(result.launch);
+        }
         throw Object.assign(new Error(result?.error || 'Сервер игры временно недоступен.'), { status: response.status, launch:result?.launch });
     }
 
@@ -9857,10 +9864,14 @@ async function startTelegramPreview() {
         launchCheck.disabled = true;
         try {
             const launch = await api({action:'launch-status'});
-            if (!launch.waiting) await loadGame();
-            else {
-                launchClockOffset = Date.parse(launch.serverNow) - Date.now();
-                tickLaunchCountdown();
+            if (launch.waiting) updateLaunchCountdown(launch);
+            else if (resumeAfterCountdown) {
+                resumeAfterCountdown = false;
+                stopLaunchCountdown();
+                entry.hidden = true;
+                document.documentElement.classList.remove('telegram-pending');
+            } else {
+                await loadGame();
             }
         } catch {
             // Следующая проверка повторится автоматически.
@@ -9868,20 +9879,29 @@ async function startTelegramPreview() {
             launchCheck.disabled = false;
         }
     }
-    function showLaunchCountdown(launch) {
-        launchDeadline = Date.parse(launch.opensAt);
+    function updateLaunchCountdown(launch) {
+        const deadline = Date.parse(launch.opensAt);
+        const dateChanged = deadline !== launchDeadline;
+        launchDeadline = deadline;
         launchClockOffset = Date.parse(launch.serverNow) - Date.now();
-        launchDate.dateTime = launch.opensAt;
-        const date = new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',timeZone:'Europe/Moscow'});
-        const time = new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Moscow'});
-        launchDate.textContent = date.format(launchDeadline) + ' в ' + time.format(launchDeadline) + ' МСК';
+        if (dateChanged) {
+            launchDate.dateTime = launch.opensAt;
+            const date = new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',timeZone:'Europe/Moscow'});
+            const time = new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Moscow'});
+            launchDate.textContent = date.format(launchDeadline) + ' в ' + time.format(launchDeadline) + ' МСК';
+            clearTimeout(launchEndTimer);
+            launchEndTimer = setTimeout(checkLaunch,Math.min(2147483647,Math.max(0,launchDeadline - Date.now() - launchClockOffset)));
+        }
+        tickLaunchCountdown();
+    }
+    function showLaunchCountdown(launch) {
+        launchDeadline = 0;
         entryMessage.hidden = true;
         launchPanel.hidden = false;
         entry.classList.add('is-launch');
-        tickLaunchCountdown();
+        updateLaunchCountdown(launch);
         launchTickTimer = setInterval(tickLaunchCountdown,1000);
         launchPollTimer = setInterval(() => { if (!document.hidden) void checkLaunch(); },15000);
-        launchEndTimer = setTimeout(checkLaunch,Math.min(2147483647,Math.max(0,launchDeadline - Date.now() - launchClockOffset)));
     }
 
     function rolledNumber(row) {
