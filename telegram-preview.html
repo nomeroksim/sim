@@ -9642,6 +9642,7 @@ async function startTelegramPreview() {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
         if (!target) return;
         if (target.dataset.pvp === 'open' && telegramGame?.canRoll()) return;
+        if (target.id === 'openReactorButton' && telegramGame?.canRoll()) return;
         if (target.id === 'openGameRules') return;
         if (target.id === 'openRewardInbox' && telegramGame) return;
         if (target.dataset.cardAction === 'collection' && telegramGame) return;
@@ -14435,12 +14436,17 @@ var j=jump(),cost=S.protect?protectCost():0;
 if(S.protect&&S.cry<cost){sfx.err();toast('Не хватает кристаллов','err');S.protect=false;renderProtect();return;}
  G.busy=true;hideResult();renderButtons();renderProtect();
  setStatus('run','СОХРАНЯЕМ СТАВКУ');
- var win=Math.random()*100<j.chance;
- var toRarity=targetRarity(c,j.n);
- var secret=toRarity==='secret'?targetSecret(c,j.n):null;
- var settlement;
+ var win,settlement;
  try{
-   settlement=await BR.settle(c,win,toRarity,secret,j.chance,!!cost);
+   if(BR.play){
+     settlement=await BR.play(c,j.n,!!cost);
+     win=settlement.win;
+   }else{
+     win=Math.random()*100<j.chance;
+     var toRarity=targetRarity(c,j.n);
+     var secret=toRarity==='secret'?targetSecret(c,j.n):null;
+     settlement=await BR.settle(c,win,toRarity,secret,j.chance,!!cost);
+   }
  }catch(error){
    G.busy=false;sync();renderAll();setStatus('','СТАВКА НЕ ПРОШЛА');
    sfx.err();toast(esc(error.message||'Ошибка сохранения ставки'),'err');return;
@@ -14590,7 +14596,9 @@ window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.
     const secretLadder = ['16','15','14','13','12','11','10','9','8','7','6','5','4','3','2','1','0','0123456789'];
     const me = () => allPlayers.find(p => p.isMe);
     const protectCost = price => Math.max(50, Math.min(5000, Math.round(price * 0.02)));
-    const prize = (price, chance) => Math.floor(price * (90 / chance));
+    const prize = (price, chance) => telegramPreview
+        ? Number(BigInt(price) * 90n / BigInt(chance))
+        : Math.floor(price * (90 / chance));
     const cardView = n => {
         const operator = OPERATORS.find(o => String(o.code) === String(n.op)) || n.opObj || {};
         const name = operator.name || 'SIM';
@@ -14600,7 +14608,8 @@ window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.
         };
     };
     function available(n) {
-        return n.id != null && !n.exc && !isTrophyNumber(n) && Number.isSafeInteger(Number(n.price)) && Number(n.price) > 0;
+        return n.id != null && !n.exc && !isTrophyNumber(n) && Number.isSafeInteger(Number(n.price)) && Number(n.price) > 0
+            && (!telegramPreview || ['common','rare','epic','legendary','mythic','secret'].includes(n.rarity.key));
     }
     function stakeQuery(query, n, pid) {
         query = query.eq('player_id', pid).eq('id', n.id).eq('price', n.price)
@@ -14723,10 +14732,20 @@ window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.
         return { card: result, cry: userCrystals };
     }
 
+    async function play(stake, step, insured) {
+        if (!telegramGame?.canRoll()) throw new Error('Открой игру заново из Telegram.');
+        const state = await telegramGame.trade('upgrade-play', {
+            numberId: stake.id, step, insured,
+            expectedNumber: stake.number, expectedRarity: stake.rarity, expectedPrice: stake.price
+        });
+        const result = state.upgrade;
+        return { win: result.won, card: result.card ? cardView(mapPlayerNumber(result.card)) : null, cry: userCrystals };
+    }
+
     let frame;
     const refresh = () => frame?.contentWindow.SG_REACTOR_REFRESH?.();
     window.SG_REACTOR = {
-        secretLadder, prize, protectCost, settle, refresh,
+        secretLadder, prize, protectCost, settle, refresh, play: telegramPreview ? play : null,
         read: () => {
             const player = me();
             return { pid: player?.id ?? 'guest', cards: player ? savedNumbers.filter(available).map(cardView) : [],
@@ -14740,6 +14759,7 @@ window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.
         }
     };
     window.openUpgradeGame = () => {
+        if (telegramPreview && !telegramGame?.canRoll()) return;
         const screen = document.getElementById('upgradeGameScreen');
         screen.classList.add('active');
         screen.setAttribute('aria-hidden', 'false');
