@@ -14,7 +14,17 @@ if (location.pathname.endsWith('/telegram-preview.html') || new URLSearchParams(
 <title>Sim Card Game</title>
 <link rel="preconnect" href="https://wftudhjdehkdhcmtcjkl.supabase.co" crossorigin>
 <link rel="dns-prefetch" href="https://wftudhjdehkdhcmtcjkl.supabase.co">
-<script>/* лёгкий режим включается до первой отрисовки, чтобы экран не «дёрнулся» */try{var pm=localStorage.getItem('perf_mode'),pa=localStorage.getItem('perf_auto'),dm=navigator.deviceMemory,hc=navigator.hardwareConcurrency;if(pm==='lite'||(pm!=='full'&&(pa==='lite'||(dm&&dm<=2)||(hc&&hc<=2))))document.documentElement.classList.add('perf-lite')}catch(e){}</script>
+<script>
+try {
+    const root = document.documentElement;
+    const mode = localStorage.getItem('perf_mode');
+    const mobileTelegram = root.classList.contains('telegram-preview') && matchMedia('(pointer: coarse)').matches;
+    if (mode === 'lite' || (mode !== 'full' && (mobileTelegram || localStorage.getItem('perf_auto') === 'lite' ||
+        (navigator.deviceMemory && navigator.deviceMemory <= 2) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2)))) {
+        root.classList.add('perf-lite');
+    }
+} catch (_) {}
+</script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></noscript>
 <style>
     :root {
@@ -2527,6 +2537,7 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: 
   background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.35)}
 #profileScreen .meta-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
 #profileScreen .telegram-username{display:block;margin-top:4px;color:var(--text-2,#9fb4aa);font-size:13px;overflow-wrap:anywhere}
+#profileScreen .game-owner-tag{--tc:#f0c468;background:#45371d;border-color:#9d7c43;color:#ffe3a3}
 #profileScreen .idchip{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:700;color:var(--muted);
   background:var(--glass);border:1px solid var(--stroke);transition:.15s}
 #profileScreen .idchip:hover{color:var(--text);border-color:var(--stroke-2)}
@@ -8509,7 +8520,8 @@ function updateProfileUI(){
             <h1>${escHtml(me.name||'Игрок')}</h1>
             <span data-collector-player="${escHtml(me.id)}"></span>
             ${hasDevGift(me) ? devGiftBadge(true) : ''}
-            ${tagList(me.tag).length ? tagList(me.tag).map(k => `<span class="tag" style="--tc:${TAG_COLORS[k] || '#FFB020'}">${pIcon('crown',12)}${escHtml(TAGS[k]?.label || k)}</span>`).join('') : `<span class="tag">${pIcon('crown',12)}Игрок</span>`}
+            ${me.is_game_owner ? `<span class="tag game-owner-tag">${pIcon('crown',12)}Владелец</span>` : ''}
+            ${tagList(me.tag).length ? tagList(me.tag).filter(k => !me.is_game_owner || k !== 'owner').map(k => `<span class="tag" style="--tc:${TAG_COLORS[k] || '#FFB020'}">${pIcon('crown',12)}${escHtml(TAGS[k]?.label || k)}</span>`).join('') : me.is_game_owner ? '' : `<span class="tag">${pIcon('crown',12)}Игрок</span>`}
           </div>
           ${me.telegram_username ? `<span class="telegram-username">@${escHtml(me.telegram_username)}</span>` : ''}
           <div class="meta-row">
@@ -9680,17 +9692,17 @@ async function loadMarketLotsFromDB() {
     }));
 }
 // Запуск игры с серверной сессией Telegram.
-function configureTelegramFullscreen(app) {
+function configureTelegramHeader(app) {
     if (!app) return;
     try { app.setHeaderColor?.(app.isVersionAtLeast?.('6.9') ? '#0b100e' : 'bg_color'); }
     catch (_) { /* Некоторые клиенты не поддерживают настройку цвета панели. */ }
-    if (!app.isVersionAtLeast?.('8.0') || typeof app.requestFullscreen !== 'function') return;
+    if (!app.isVersionAtLeast?.('8.0')) return;
     const sync = () => document.documentElement.classList.toggle('telegram-fullscreen', app.isFullscreen === true);
     app.onEvent?.('fullscreenChanged',sync);
     sync();
-    if (!app.isFullscreen) {
-        try { app.requestFullscreen(); }
-        catch (_) { /* Игра доступна и в обычном режиме. */ }
+    if (app.isFullscreen) {
+        try { app.exitFullscreen?.(); }
+        catch (_) { /* Клиент сам управляет панелью. */ }
     }
 }
 
@@ -9738,6 +9750,7 @@ async function startTelegramPreview() {
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
     let session = '', readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity, profileId;
+    let gameOwner = false;
     let passCards = [], shopCards = [];
     let cardVault = null, vaultRequest;
     let buying = false;
@@ -9772,7 +9785,7 @@ async function startTelegramPreview() {
                 avatar_url:telegramIdentity.avatarUrl || player.avatar_url };
         }
         if (!readOnly) player = { ...player, tag:playerTags?.shown.join(',') || null, ownedTags:playerTags?.owned || [] };
-        allPlayers = [{ ...player, isMe: true }];
+        allPlayers = [{ ...player, isMe:true, is_game_owner:gameOwner }];
         currentUser.name = player.name || 'Игрок';
         balance = Number(player.balance) || 0;
         userCrystals = Number(player.user_crystals) || 0;
@@ -10126,6 +10139,7 @@ async function startTelegramPreview() {
         session = state.session;
         telegramIdentity = state.telegramProfile;
         profileId = state.profileId;
+        gameOwner = state.gameOwner === true;
         const profile = state.linkedProfile ?? await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
             starsStatus, starsInvoice: (pack,requestId) => api({action:'stars-invoice',itemId:pack.id,revision:pack.revision,requestId,accepted:true}),
@@ -10157,7 +10171,7 @@ async function startTelegramPreview() {
       } finally {
         const app = window.Telegram?.WebApp;
         app?.ready();
-        if (entry.hidden) configureTelegramFullscreen(app);
+        if (entry.hidden) configureTelegramHeader(app);
       }
     }
     retry.addEventListener('click',loadGame);
@@ -10324,7 +10338,7 @@ async function openOtherProfile(playerId, assets) {
             </div>
             <div class="id-main">
                 <div class="name-row"><h1>${escHtml(p.name || 'Игрок')}</h1><span data-collector-player="${escHtml(p.id)}"></span>${hasDevGift(p) ? devGiftBadge(true) : ''}</div>
-                ${tagList(p.tag).length ? `<div class="badge-row">${tagList(p.tag).map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${_pIcon('shield', 11)}${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}</div>` : ''}
+                ${p.is_game_owner || tagList(p.tag).length ? `<div class="badge-row">${p.is_game_owner ? `<span class="badge-owner" style="--tc:#f0c468">${_pIcon('shield',11)}ВЛАДЕЛЕЦ</span>` : ''}${tagList(p.tag).filter(k => !p.is_game_owner || k !== 'owner').map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${_pIcon('shield', 11)}${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}</div>` : ''}
                 <div class="meta-row">
                     <button class="idchip num" data-other-copy="${escHtml(p.id)}" aria-label="Скопировать ID">ID: ${escHtml(p.id)} ${_pIcon('copy', 13)}</button>
                     <span class="online"><i></i>онлайн</span>
@@ -17804,9 +17818,16 @@ $('#bpTaskIc').innerHTML = ic('list', 18);
   // ручное переключение из консоли: perfMode('lite') / perfMode('full') / perfMode('auto')
   // пока поверх главного экрана открыт раздел, анимации карты под ним стоят на паузе
   let scrRaf = 0;
-  const syncScreenOpen = () => { scrRaf = 0; document.body.classList.toggle('screen-open', !!document.querySelector('[class*="-screen"].active')); };
-  new MutationObserver(() => { if (!scrRaf) scrRaf = requestAnimationFrame(syncScreenOpen); })
-    .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('DOMContentLoaded',() => {
+    const screens = [...document.querySelectorAll('[class*="-screen"],#cardCollectionScreen,#bjScreen,#upgradeGameScreen')];
+    const syncScreenOpen = () => {
+      scrRaf = 0;
+      document.body.classList.toggle('screen-open',screens.some(screen => screen.classList.contains('active')));
+    };
+    const observer = new MutationObserver(() => { if (!scrRaf) scrRaf = requestAnimationFrame(syncScreenOpen); });
+    for (const screen of screens) observer.observe(screen,{attributes:true,attributeFilter:['class']});
+    syncScreenOpen();
+  },{once:true});
   window.perfMode = mode => {
     try { mode === 'auto' ? localStorage.removeItem('perf_mode') : localStorage.setItem('perf_mode', mode); } catch (e) {}
     html.classList.toggle('perf-lite', mode === 'lite');
@@ -17814,7 +17835,7 @@ $('#bpTaskIc').innerHTML = ic('list', 18);
   };
   let forced = null;
   try { forced = localStorage.getItem('perf_mode'); } catch (e) {}
-  if (forced) return;
+  if (forced || html.classList.contains('perf-lite')) return;
   // замер плавности: 2 секунды после загрузки считаем время кадров;
   // если медианный кадр дольше 24 мс (меньше ~40 кадров/с), включаем лёгкий режим и запоминаем это
   const start = () => {
@@ -19890,14 +19911,15 @@ button.dev-gift-mark:active { scale:.94; }
     const bound = Boolean(lobby?.bound), ownOpen = lobby?.history.some(item => item.status === 'open');
     binding.hidden = telegramPreview || !lobby || !account() || bound;
     createButton.disabled = busy || !bound || !choose.value || ownOpen;
-    choose.disabled = busy;
+    choose.disabled = busy || lobby?.ownerExcluded === true;
     const empty = text => '<div class="pv-empty">'+text+'</div>';
     const list = lobby?.open.length ? lobby.open.map(d => {
       const own = d.host_id === pid;
       return `<div class="pv-row"><div><b>${esc(d.host_name)}${own?' · Вы':''}</b><small>До ${expiry.format(Date.parse(d.expires_at))} МСК</small></div>
         <button type="button" class="pv-action" data-pvp="${own?'cancel':'join'}" data-duel="${esc(d.id)}" ${busy || !bound || (!own && !choose.value)?'disabled':''}>${own?'Отменить':'Принять'}</button></div>`;
     }).join('') : empty(lobby ? 'Пока нет открытых вызовов' : 'Проверяем арену…');
-    const recent = lobby?.history.length ? lobby.history.map(d => {
+    const completed = lobby?.history.filter(item => !lobby.ownerExcluded || item.status !== 'open');
+    const recent = completed?.length ? completed.map(d => {
       const title = d.status === 'finished' ? (!d.winner_id ? 'Ничья' : d.winner_id === pid ? 'Победа' : 'Поражение')
         : {open:'Ждёт соперника',cancelled:'Вызов отменён',expired:'Срок вызова истёк',unavailable:'Номер больше недоступен'}[d.status];
       const finished = d.status === 'finished';
@@ -19925,7 +19947,10 @@ button.dev-gift-mark:active { scale:.94; }
       if (turn !== epoch || version !== readVersion) return;
       if (error) throw error;
       lobby = data;
-      if (telegramPreview && account()) account().pvp_wins = data.wins;
+      if (data.ownerExcluded) {
+        status.textContent = 'Аккаунт владельца не участвует в PvP и рейтинге.';
+        clearInterval(interval);
+      } else if (telegramPreview && account()) account().pvp_wins = data.wins;
       render();
     } catch (error) {
       if (turn === epoch && version === readVersion && (showErrors || !lobby)) {
