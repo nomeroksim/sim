@@ -9929,7 +9929,7 @@ async function startTelegramPreview() {
     async function starsStatus(id) {
         const version = walletVersion;
         const result = await api({action:'stars-status',id});
-        if (['paid','refunded'].includes(result.status) && version === walletVersion &&
+        if (!result.passPlan && ['paid','refunded'].includes(result.status) && version === walletVersion &&
             !readOnly && !buying && !isRolling && !rollActionBusy) {
             const player = allPlayers.find(item => item.isMe);
             if (player) renderWallet({...player,balance:result.balance,user_crystals:result.walletCrystals});
@@ -10097,6 +10097,7 @@ async function startTelegramPreview() {
         const profile = await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
             starsStatus, starsInvoice: (pack,requestId) => api({action:'stars-invoice',itemId:pack.id,revision:pack.revision,requestId,accepted:true}),
+            starsPassInvoice: (plan,requestId) => api({action:'stars-pass-invoice',plan,requestId,accepted:true}),
             checkAsset: (kind,value) => api({action:'asset-check',kind,value}),
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
             likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
@@ -16546,7 +16547,6 @@ window.addEventListener('pagehide', () => { if (saveT) flush(); });
 const MAX_LVL = 50, XP_NEED = 500;
 const STARS = { base: 100, plus: 200 };   // цена пропуска в звёздах Telegram
 const LVL_COST = 99;                        // один уровень пропуска за кристаллы
-const STARS_ENABLED = false;                // оплата звёздами временно выключена — поставь true, когда бот и функции Supabase будут готовы
 const SEASON_ID = '01';
 const SEASON_END = FIRST_SEASON_END_AT;
 const XP_FOR = { spin: 15, save: 10, sell: 12, buy: 25, buyuz: 30, upgrade: 35, luck: 20 };
@@ -17459,6 +17459,14 @@ function rewardInfo(lvl, track) {
    : `<button class="btn full" disabled>${ic('lock',15)}Нужен ${lvl} уровень</button>`}`);
 }
 let buyOpt = 'base';
+let buying = false;
+const tgApp = () => window.Telegram?.WebApp;
+const tgPayAvailable = () => telegramPreview && telegramGame?.canPurchase() &&
+  !!tgApp()?.initData && typeof tgApp()?.openInvoice === 'function' && tgApp().isVersionAtLeast?.('6.1') !== false;
+const passStarsKey = () => 'simgame_stars_pending_pass_' + (tgApp()?.initDataUnsafe?.user?.id || 'default');
+function pendingPremiumOrder() {
+  try { return localStorage.getItem(passStarsKey()); } catch { return null; }
+}
 function openPremium() { if (S.premium) return; buyOpt = 'base'; renderPremiumModal(); $('#bpScrim').classList.add('show'); $('#bpPremiumModal').classList.add('show'); sfx.open(); }
 function closePremium() { $('#bpPremiumModal').classList.remove('show'); if (!$('#bpDrawer').classList.contains('open')) $('#bpScrim').classList.remove('show'); }
 function renderPremiumModal() {
@@ -17470,28 +17478,24 @@ function renderPremiumModal() {
     { i:'bolt', t:'+20% опыта с заданий', s:'До конца сезона' },
     { i:'gift', t:'Все 50 премиум-наград', s:'Деньги, кристаллы, крутки, удача' }
   ];
-  const stars = STARS[buyOpt], inTg = tgPayAvailable();
+  const stars = STARS[buyOpt], available = tgPayAvailable(), pending = pendingPremiumOrder();
+  const blockedReason = ended() ? 'Сезон завершён' : telegramPreview ? 'Для оплаты нужен основной профиль и актуальный Telegram' : 'Открой игру в Telegram';
   $('#bpPmBox').innerHTML = `<h3 id="bpPmTitle">Premium-пропуск</h3><p class="msub">Сезон ${SEASON_ID} · Золотая волна · оплата звёздами Telegram</p>
   <div class="benefits">${benefits.map(b => `<div class="benefit">${ic(b.i,18)}<div><b>${b.t}</b><small>${b.s}</small></div></div>`).join('')}</div>
   <button class="buy-opt ${buyOpt === 'base' ? 'sel' : ''}" data-bp="buy-opt" data-opt="base"><span class="bo-ic">${ic('crown',20)}</span><span class="bo-info"><b>Premium</b><small>Открывает золотую ветку</small></span><span class="bo-price stars">${STARS.base} ⭐</span></button>
-  <button class="buy-opt ${buyOpt === 'plus' ? 'sel' : ''}" data-bp="buy-opt" data-opt="plus"><span class="bo-ic">${ic('up',20)}</span><span class="bo-info"><b>Premium + 10 уровней</b><small>Сразу +10 уровней пропуска</small></span><span class="bo-price stars">${STARS.plus} ⭐</span></button>
-  ${STARS_ENABLED ? `<button class="btn gold full" style="margin-top:6px" data-bp="buy-premium">${ic('star',15)}Оплатить ${stars} ⭐</button>` : `<button class="btn full" style="margin-top:6px" disabled>${ic('lock',15)}Оплата временно недоступна</button>`}
+  <button class="buy-opt ${buyOpt === 'plus' ? 'sel' : ''}" data-bp="buy-opt" data-opt="plus"><span class="bo-ic">${ic('up',20)}</span><span class="bo-info"><b>Premium + 10 уровней</b><small>Сразу +10 уровней, максимум 50-й</small></span><span class="bo-price stars">${STARS.plus} ⭐</span></button>
+  ${available && (pending || !ended()) ? `<button class="btn gold full" style="margin-top:6px" data-bp="buy-premium" ${buying ? 'disabled' : ''}>${ic('star',15)}${pending ? 'Проверить оплату' : 'Согласен, оплатить ' + stars + ' ⭐'}</button>` : `<button class="btn full" style="margin-top:6px" disabled>${ic('lock',15)}${blockedReason}</button>`}
   <button class="btn full" style="margin-top:9px" data-bp="close-premium">Позже</button>
-  <p class="stars-note">${!STARS_ENABLED ? 'Покупка за звёзды скоро появится. Пока Premium-пропуск может выдать администрация.' : inTg ?'Откроется окно оплаты Telegram. Пропуск активируется сразу после оплаты.' : 'Оплата звёздами работает, когда игра открыта внутри Telegram. Пропуск также может выдать администрация.'}</p>`;
+  ${available && (pending || !ended()) ? '<p class="stars-note">Пропуск действует до конца сезона. Premium активируется после подтверждения Telegram. По вопросам оплаты и возврата обратись в «Техподдержку» игры или отправь боту /paysupport.</p>' : ''}`;
 }
-let buying = false;
-const tgApp = () => (window.Telegram && window.Telegram.WebApp) || null;
-const tgPayAvailable = () => { const w = tgApp(); return !!(w && w.initData && typeof w.openInvoice === 'function'); };
 
-// Активация Premium. Источник — выдача админом или подтверждённая ботом оплата звёздами
-// (запись kind:'bpgrant' в market_lots). Игра забирает её один раз и помечает использованной.
-let lastGrantAt = 0;
+// Выдача Premium администрацией для прежней браузерной версии.
 function activatePremium(plan, source) {
   st();
   const was = S.premium;
   S.premium = true;
   if (plan === 'plus') { S.level = Math.min(MAX_LVL, S.level + 10); if (S.level >= MAX_LVL) S.xp = 0; }
-  syncAuto(); save(); lastGrantAt = now();
+  syncAuto(); save();
   const msg = plan === 'plus' ? 'Premium + 10 уровней активирован!' : (was ? 'Premium уже был активен' : 'Premium-пропуск активирован!');
   if (isOpen()) { closePremium(); renderAll(); sfx.premium(); burst(160); toast(msg, 'gold'); scrollToLevel(S.level); }
   else if (typeof showToast === 'function') showToast('success', msg, source === 'admin' ? 'Выдано администрацией' : 'Спасибо за покупку!');
@@ -17517,33 +17521,54 @@ async function applyGrants() {
 const _lmBp = window.loadMarketLotsFromDB;
 window.loadMarketLotsFromDB = async function () { await _lmBp.apply(this, arguments); try { await applyGrants(); } catch (e) { console.warn('[bp] grants', e); } };
 
-// Оплата звёздами: функция Supabase «bp-invoice» создаёт счёт в боте (валюта XTR),
-// Telegram открывает окно оплаты; после оплаты бот («bp-webhook») сам записывает выдачу пропуска.
 async function buyPremium(btn) {
-  if (buying || S.premium) return;
-  if (!STARS_ENABLED) { sfx.err(); toast('Оплата временно недоступна', 'err'); return; }
-  const m = me(); if (!m) { sfx.err(); toast('Сначала войди в аккаунт', 'err'); return; }
-  if (!tgPayAvailable()) { sfx.err(); toast('Оплата звёздами доступна только в Telegram-версии игры', 'err'); return; }
-  const plan = buyOpt;
-  buying = true; if (btn) btn.classList.add('busy');
+  if (buying || !tgPayAvailable()) return;
+  let orderId = pendingPremiumOrder();
+  if (!orderId && (!btn || S.premium || ended())) return;
+  buying = true;
+  if (btn) btn.disabled = true;
   try {
-    const { data, error } = await _supabase.functions.invoke('bp-invoice', { body: { plan, player_id: m.id, init_data: tgApp().initData } });
-    if (error || !data || !data.link) throw new Error(error ? error.message : (data && data.error) || 'счёт не создан');
-    const started = now();
-    tgApp().openInvoice(data.link, async status => {
-      if (status === 'paid') {
-        toast('Оплата прошла — активируем пропуск…', 'gold');
-        for (let i = 0; i < 10 && lastGrantAt < started; i++) {
-          await new Promise(r => setTimeout(r, 1500));
-          if (typeof loadMarketLotsFromDB === 'function') await loadMarketLotsFromDB();
-        }
-        if (lastGrantAt < started) toast('Оплата получена. Пропуск появится в течение минуты', 'gold');
-      } else if (status === 'cancelled') toast('Оплата отменена', 'err');
-      else if (status === 'failed') { sfx.err(); toast('Оплата не прошла', 'err'); }
-    });
+    const checking = !!orderId;
+    if (!checking) {
+      const bill = await telegramGame.starsPassInvoice(buyOpt,crypto.randomUUID());
+      orderId = bill.id;
+      localStorage.setItem(passStarsKey(),orderId);
+      const status = await new Promise((resolve,reject) => {
+        try { tgApp().openInvoice(bill.url,resolve); }
+        catch (error) { localStorage.removeItem(passStarsKey()); reject(error); }
+      });
+      if (status === 'cancelled' || status === 'failed') {
+        localStorage.removeItem(passStarsKey());
+        if (status === 'failed') toast('Оплата не прошла', 'err');
+        return;
+      }
+    }
+    for (const pause of checking ? [0] : [0,600,1200,2400]) {
+      if (pause) await new Promise(resolve => setTimeout(resolve,pause));
+      const result = await telegramGame.starsStatus(orderId);
+      if (result.status === 'paid') {
+        await telegramGame.passStatus();
+        localStorage.setItem('simgame_stars_last_paid_' + (tgApp()?.initDataUnsafe?.user?.id || 'default'),orderId);
+        localStorage.removeItem(passStarsKey());
+        closePremium();
+        sfx.premium();
+        burst(160);
+        toast(result.passPlan === 'plus' ? 'Premium + уровни активирован!' : 'Premium-пропуск активирован!', 'gold');
+        return;
+      }
+      if (result.status === 'expired' || result.status === 'refunded') {
+        localStorage.removeItem(passStarsKey());
+        toast(result.status === 'refunded' ? 'Звёзды возвращены' : 'Срок действия счёта истёк','gold');
+        return;
+      }
+    }
+    toast('Подтверждение ещё не пришло. Нажми «Проверить оплату» позже.', 'gold');
   } catch (e) {
-    sfx.err(); toast('Не удалось открыть оплату: ' + esc(e.message || e), 'err');
-  } finally { buying = false; if (btn) btn.classList.remove('busy'); }
+    sfx.err(); toast(esc(e.message || 'Не удалось проверить оплату'), 'err');
+  } finally {
+    buying = false;
+    if ($('#bpPremiumModal').classList.contains('show')) renderPremiumModal();
+  }
 }
 
 // Покупка уровней за кристаллы (99 ◆ за уровень). Если до максимального уровня осталось меньше — платишь только за оставшиеся.
@@ -17581,7 +17606,9 @@ window.openBattlePass = function () {
   if (typeof closeMenu === 'function') closeMenu();
   st(); renderAll();
   const scr = $('#bpScreen'); scr.classList.add('active'); scr.setAttribute('aria-hidden', 'false'); scr.scrollTop = 0;
-  if (telegramPreview) void telegramGame.passStatus().catch(e => toast(esc(e.message), 'err'));
+  if (telegramPreview) void telegramGame.passStatus().then(() => {
+    if (S?.premium && pendingPremiumOrder()) void buyPremium();
+  }).catch(e => toast(esc(e.message), 'err'));
   requestAnimationFrame(() => { if (isOpen()) scrollToLevel(S.level,false); });
 };
 window.closeBattlePass = function () {
@@ -17684,7 +17711,7 @@ $('#bpScreen').addEventListener('click', e => {
     case 'reward-info': rewardInfo(Number(t.dataset.lvl), t.dataset.track); break;
     case 'open-premium': openPremium(); break;
     case 'close-premium': closePremium(); break;
-    case 'buy-opt': buyOpt = t.dataset.opt; renderPremiumModal(); sfx.tick(); break;
+    case 'buy-opt': if (!buying) { buyOpt = t.dataset.opt; renderPremiumModal(); sfx.tick(); } break;
     case 'buy-premium': buyPremium(t); break;
     case 'buy-levels': buyLevels(Number(t.dataset.n) || 1, t); break;
     case 'close-all': closeAll(); break;
