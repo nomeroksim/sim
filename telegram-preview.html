@@ -8538,7 +8538,7 @@ function updateProfileUI(){
           </div>
           ${me.telegram_username ? `<span class="telegram-username">@${escHtml(me.telegram_username)}</span>` : ''}
           <div class="meta-row">
-            ${telegramPreview ? '' : `<button class="idchip num" onclick="copyProfileId()">ID ${escHtml(me.id)} ${pIcon('copy',13)}</button>`}
+            ${profileDisplayId(me) ? `<button class="idchip num" onclick="copyProfileId()">ID ${escHtml(profileDisplayId(me))} ${pIcon('copy',13)}</button>` : ''}
             <span class="online"><i></i>онлайн</span>
           </div>
           ${me.created_at ? `<div class="since">${profileSince(me)}</div>` : ''}
@@ -8749,9 +8749,15 @@ function cycleSortProfile(){
   renderProfileSheet();
 }
 
+function profileDisplayId(player) {
+  if (!player) return '';
+  if (telegramPreview) return player.is_game_owner ? 'dev' : player.public_id || '';
+  return String(player.id ?? '');
+}
 function copyProfileId(){
   const me = allPlayers.find(p => p.isMe);
-  if (me) copyProfileText(String(me.id));
+  const id = profileDisplayId(me);
+  if (id) copyProfileText(id);
 }
 
 async function copyProfileText(text){
@@ -9767,7 +9773,7 @@ async function startTelegramPreview() {
     refreshRollActions();
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
-    let session = '', readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity, profileId;
+    let session = '', readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity, profileId, publicId;
     let gameOwner = false;
     let joinedAt, joinedAtEstimated;
     let passCards = [], shopCards = [];
@@ -9925,7 +9931,7 @@ async function startTelegramPreview() {
         telegramUsernames(state.usernames);
         renderWallet({ id:profileId, ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             main_uz:pinnedUz.join(',') || null, second_uz:null,
-            rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
+            rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0, public_id:publicId });
         if (state.pass) acceptPass(state.pass);
         else renderTelegramCards();
         updateRollButtons();
@@ -10159,6 +10165,7 @@ async function startTelegramPreview() {
         session = state.session;
         telegramIdentity = state.telegramProfile;
         profileId = state.profileId;
+        publicId = state.publicId;
         gameOwner = state.gameOwner === true;
         joinedAt = state.joinedAt;
         joinedAtEstimated = state.joinedAtEstimated === true;
@@ -10364,7 +10371,7 @@ async function openOtherProfile(playerId, assets) {
                 ${p.telegram_username ? `<div class="public-profile-username">@${escHtml(p.telegram_username)}</div>` : ''}
                 <div class="public-profile-info">
                     ${profileSince(p)}
-                    <button class="idchip public-profile-id" type="button" data-other-copy="${escHtml(p.id)}" aria-label="Скопировать ID профиля">${_pIcon('copy',13)} ID</button>
+                    ${profileDisplayId(p) ? `<button class="idchip public-profile-id" type="button" data-other-copy="${escHtml(profileDisplayId(p))}" aria-label="Скопировать ID профиля">${_pIcon('copy',13)} ID ${escHtml(profileDisplayId(p))}</button>` : ''}
                 </div>
             </div>
         </div>
@@ -13637,7 +13644,7 @@ async function loadTelegramRating() {
       secret:{count:Number(p.secret_count)||0,total:Number(p.secret_total)||0,featured:p.secret_featured || ''},
       balance:{total:wallet,count:numberCount},pvp:{total:wins,count:wins}
     };
-    return {id:p.id,name:p.name||'Игрок',username:p.telegram_username ? '@' + p.telegram_username : null,
+    return {id:p.id,public_id:p.public_id,name:p.name||'Игрок',username:p.telegram_username ? '@' + p.telegram_username : null,
       tag:p.tag,me:p.isMe,avatar:p.avatar_url,devGift:hasDevGift(p),
       created:p.created_at,main_uz:p.main_uz,second_uz:p.second_uz,balance:wallet,numbers,uz,assets,numberCount,usernameCount,
       capital:wallet+(Number(p.number_total)||0)+usernameTotal*100,bestNumber:numbers.find(n => !isTrophyNumber(n)) || null};
@@ -13828,7 +13835,7 @@ function openPlayerUz(pid, name) {
     <div class="dplate" style="${vars(rk)}"><span class="uzx-tag">${ic('sparkles', 11)}${r.label.toUpperCase()}</span><div class="uzx-handle">${esc(u.name)}</div><span class="uzx-len">${len} ${plural(len, 'символ', 'символа', 'символов')}${dots(u.name)}</span></div>
     <div class="chartbox"><div class="charttop"><b>${fmt(u.price)}</b>${ic('gem', 16)}${deltaU(chg)}<small>история цены</small></div>${chartSVG(hist.length > 1 ? hist : [hist[0], hist[0]], r.color)}</div>
     <div class="rows">
-      <div class="urow"><span class="uic">${ic('user', 16)}</span><div class="tx"><small>Владелец</small><b>${esc(p.name)}${p.me ? ' · Вы' : ''} · ID ${p.id}</b></div></div>
+      <div class="urow"><span class="uic">${ic('user', 16)}</span><div class="tx"><small>Владелец</small><b>${esc(p.name)}${p.me ? ' · Вы' : ''}${profileDisplayId(p) ? ' · ID ' + esc(profileDisplayId(p)) : ''}</b></div></div>
       ${u.boughtAt ? `<div class="urow"><span class="uic">${ic('calendar', 16)}</span><div class="tx"><small>Дата покупки</small><b>${new Date(u.boughtAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}</b></div></div>` : ''}
       <div class="urow"><span class="uic">${ic('coins', 16)}</span><div class="tx"><small>Куплен за</small><b>${fmt(buy)} ◆</b></div>${deltaU(buy > 0 ? (u.price - buy) / buy * 100 : 0)}</div>
       <div class="urow"><span class="uic">${ic('hash', 16)}</span><div class="tx"><small>Редкость</small><b style="color:${r.color}">${r.label} · ${r.desc}</b></div></div>
@@ -13857,7 +13864,7 @@ function openPlayer(id) {
   const g = growth(p), pins = parsePinnedUz(p), uzs = pins.map(n => p.uz.find(u => u.name === n)).filter(Boolean).concat(p.uz.filter(u => !pins.includes(u.name)));
   const nums = p.numbers.slice().sort((a, c) => c.price - a.price).slice(0, 5);
   const html = `<div class="rtd">${X.drawerHead('Профиль игрока')}
-    <div class="phero">${ava(p, 64)}<div class="phero-i"><div class="dev-gift-profile-title"><h4>${esc(p.name)}${p.me ? ' · Вы' : ''}</h4>${p.devGift ? devGiftBadge(true) : ''}</div><div class="since">${p.username ? esc(p.username) + ' · ' : ''}ID ${p.id} · место ${rank}${p.created ? ' · в игре с ' + new Date(p.created).toLocaleDateString('ru-RU') : ''}</div></div></div>
+    <div class="phero">${ava(p, 64)}<div class="phero-i"><div class="dev-gift-profile-title"><h4>${esc(p.name)}${p.me ? ' · Вы' : ''}</h4>${p.devGift ? devGiftBadge(true) : ''}</div><div class="since">${[p.username && esc(p.username), profileDisplayId(p) && 'ID ' + esc(profileDisplayId(p)), rank > 0 && 'Место в рейтинге №' + rank, p.created && 'В игре с ' + new Date(p.created).toLocaleDateString('ru-RU')].filter(Boolean).join(' · ')}</div></div></div>
     <div class="badges">${badges}</div>
     <div class="pstats">
       <div class="pstat g"><small>Капитал</small><b>${money(capital(p))}</b></div>
@@ -13873,7 +13880,7 @@ function openPlayer(id) {
       <div class="sec">${ic('layers', 16)}<h5>Топ номеров</h5><span>${ratingNumbers(p)} всего</span></div>
       <ol class="rt-number-list">${nums.map(profileRatingNumber).join('')}</ol>
     </section>` : ''}
-    <div class="dactions"><button class="btn" data-rt="copy-id" data-id="${p.id}">${ic('copy', 15)}Скопировать ID</button><button class="btn primary" data-rt="full" data-id="${p.id}">${ic('eye', 15)}Открыть профиль</button></div></div>`;
+    <div class="dactions">${profileDisplayId(p) ? `<button class="btn" data-rt="copy-id" data-id="${esc(profileDisplayId(p))}">${ic('copy', 15)}Скопировать ID</button>` : ''}<button class="btn primary" data-rt="full" data-id="${p.id}">${ic('eye', 15)}Открыть профиль</button></div></div>`;
   X.openDrawer(html, { owner: 'rt', id: p.id });
 }
 function profileRatingNumber(n) {
