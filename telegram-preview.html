@@ -9811,6 +9811,7 @@ async function startTelegramPreview() {
     let pendingRoll = null;
     const pendingItems = new Map();
     const ratingProfiles = new Map();
+    let ratingOwnerId;
     let playerTags = null;
     let tagVersion = 0;
     let changingTag = false;
@@ -10163,6 +10164,7 @@ async function startTelegramPreview() {
             cursor = page.next;
         }
         if (scope !== walletScope) throw new Error('Профиль изменился. Открой рейтинг снова.');
+        ratingOwnerId = first.ownerProfileId;
         if (!readOnly && version === walletVersion) {
             const before = savedNumbers.filter(isTrophyNumber);
             const owned = [...new Map(first.myTrophies.map(row => [row.formatted, row])).values()];
@@ -10181,13 +10183,15 @@ async function startTelegramPreview() {
         const key = scope + ':' + id;
         let cached = ratingProfiles.get(key);
         if (!cached || Date.now() - cached.at > 30000) {
-            const pending = (id === 'dev' ? api({action:'rating-profile',profileId:id}).then(async profile => [
-                profile,
-                await api({action:'card-profile',profileId:profile.player.id}).catch(() => null)
-            ]) : Promise.all([
-                api({action:'rating-profile',profileId:id}),
-                api({action:'card-profile',profileId:id}).catch(() => null)
-            ])).then(([profile,featured]) => ({...profile,profileCard:featured?.card || null}));
+            const pending = (async () => {
+                const profileId = id === 'dev' ? ratingOwnerId || (await api({action:'rating'})).ownerProfileId : id;
+                if (!profileId) throw new Error('Профиль владельца недоступен.');
+                const [profile,featured] = await Promise.all([
+                    api({action:'rating-profile',profileId}),
+                    api({action:'card-profile',profileId}).catch(() => null)
+                ]);
+                return {...profile,profileCard:featured?.card || null};
+            })();
             cached = {at:Date.now(),pending};
             ratingProfiles.set(key,cached);
             try { await pending; }
