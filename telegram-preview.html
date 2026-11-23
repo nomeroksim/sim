@@ -9697,13 +9697,13 @@ function configureTelegramHeader(app) {
     if (!app) return;
     try { app.setHeaderColor?.(app.isVersionAtLeast?.('6.9') ? '#0b100e' : 'bg_color'); }
     catch (_) { /* Некоторые клиенты не поддерживают настройку цвета панели. */ }
-    if (!app.isVersionAtLeast?.('8.0')) return;
+    if (!app.isVersionAtLeast?.('8.0') || typeof app.requestFullscreen !== 'function') return;
     const sync = () => document.documentElement.classList.toggle('telegram-fullscreen', app.isFullscreen === true);
     app.onEvent?.('fullscreenChanged',sync);
     sync();
-    if (app.isFullscreen) {
-        try { app.exitFullscreen?.(); }
-        catch (_) { /* Клиент сам управляет панелью. */ }
+    if (!app.isFullscreen) {
+        try { app.requestFullscreen(); }
+        catch (_) { /* Игра доступна и в обычном режиме. */ }
     }
 }
 
