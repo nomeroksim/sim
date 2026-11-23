@@ -9645,6 +9645,7 @@ async function startTelegramPreview() {
         if (target.id === 'openReactorButton' && telegramGame?.canRoll()) return;
         if (target.id === 'openBlackjackButton' && telegramGame?.canRoll()) return;
         if (target.id === 'openGameRules') return;
+        if (target.id === 'openSupportChat') return;
         if (target.id === 'openRewardInbox' && telegramGame) return;
         if (target.dataset.cardAction === 'collection' && telegramGame) return;
         if (target.dataset.nx === 'open-card-shop' && telegramGame) return;
@@ -9964,7 +9965,9 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, duel: api,
+            support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
+            canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -18886,6 +18889,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     let session, timer, pending, busy = false, reading = false, revision = 0, lastMessage;
 
     function chatSession() {
+        if (telegramPreview) return telegramGame ? { telegram:true } : null;
         const player = allPlayers.find(item => item.isMe);
         if (!player) return null;
         const slot = 'simgame_support_key_' + player.id;
@@ -18895,6 +18899,14 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
             localStorage.setItem(slot,key);
         }
         return { p_player:String(player.id), p_key:key };
+    }
+
+    async function loadMessages(message, request) {
+        if (session.telegram) return (await telegramGame.support(message, request)).messages;
+        const args = message ? { ...session, p_body:message, p_request:request } : session;
+        const { data, error } = await _supabase.rpc('game_support_player',args);
+        if (error) throw error;
+        return data || [];
     }
 
     function render(messages) {
@@ -18924,7 +18936,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     function controls() { send.disabled = !session || busy || !input.value.trim(); }
     function describeError(error) {
         if (error?.code === 'PGRST202') return 'Чат ещё не настроен. Обратись к администратору.';
-        if (error?.code === '22023') return error.message;
+        if (error?.code === '22023' || error?.status === 400 || error?.status === 401 || error?.status === 409) return error.message;
         return 'Не удалось связаться с поддержкой. Попробуй ещё раз.';
     }
 
@@ -18933,10 +18945,9 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         const turn = revision;
         reading = true;
         try {
-            const { data, error } = await _supabase.rpc('game_support_player',session);
-            if (error) throw error;
+            const messages = await loadMessages();
             if (turn !== revision || !dialog.open) return;
-            render(data || []);
+            render(messages);
             status.textContent = 'Ответ появится в этом чате. Не присылай пароль.';
         } catch (error) {
             if (turn === revision && dialog.open) status.textContent = describeError(error);
@@ -18952,16 +18963,14 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         controls();
         status.textContent = 'Отправляем сообщение…';
         try {
-            const request = pending?.body === body && pending.player === session.p_player ? pending.request : crypto.randomUUID();
-            pending = { body, request, player:session.p_player };
-            const { data, error } = await _supabase.rpc('game_support_player', {
-                ...session, p_body:body, p_request:request
-            });
-            if (error) throw error;
+            const player = session.telegram ? 'telegram' : session.p_player;
+            const request = pending?.body === body && pending.player === player ? pending.request : crypto.randomUUID();
+            pending = { body, request, player };
+            const messages = await loadMessages(body, request);
             pending = null;
             input.value = '';
             if (turn !== revision || !dialog.open) return;
-            render(data || []);
+            render(messages);
             log.scrollTop = log.scrollHeight;
             status.textContent = 'Сообщение отправлено. Ответ появится здесь.';
         } catch (error) {
@@ -18981,7 +18990,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
         closeMenu();
         dialog.showModal();
         controls();
-        status.textContent = session ? 'Загружаем переписку…' : 'Войди в игру и разреши хранение данных, чтобы написать в поддержку.';
+        status.textContent = session ? 'Загружаем переписку…' :
+            telegramPreview ? 'Открой игру через Telegram, чтобы написать в поддержку.' : 'Войди в игру, чтобы написать в поддержку.';
         void refresh();
         if (session) timer = setInterval(refresh,12000);
     });
