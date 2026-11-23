@@ -3107,6 +3107,13 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: 
 
 #otherProfileScreen .wrap{max-width:500px;margin:0 auto;padding:14px 16px 48px;position:relative;z-index:1}
 #otherProfileScreen main{display:flex;flex-direction:column;gap:14px;margin-top:14px}
+#otherProfileScreen [hidden]{display:none!important}
+#otherProfileScreen .public-profile-info{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:9px}
+#otherProfileScreen .public-profile-username{margin-top:4px;color:#b8cdf5;font-size:13px;overflow-wrap:anywhere}
+#otherProfileScreen .public-profile-since{font-size:12px;font-weight:750;color:#d6e2fb}
+#otherProfileScreen .public-profile-id{min-height:32px;font-size:11px;padding:5px 9px}
+#otherProfileScreen .public-profile-empty{display:flex;align-items:center;gap:10px;color:var(--muted-p);padding:14px 16px}
+#otherProfileScreen .public-profile-empty .ic{color:var(--accent-p)}
 
 #otherProfileScreen .panel{position:relative;overflow:hidden;padding:18px;border-radius:var(--r-card-p);border:1px solid var(--stroke-p);
   background:
@@ -5330,8 +5337,10 @@ function updateMythicNumbers() {
 .telegram-pending body > :not(#telegramEntryStatus) { visibility:hidden }
 .telegram-preview #profileScreen .profile-copy-id { display:none }
 .telegram-fullscreen {
-    --game-safe-top:max(env(safe-area-inset-top, 0px), calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)));
+    --game-safe-top:max(env(safe-area-inset-top, 0px), var(--game-tg-sdk-top, 0px), var(--game-mobile-header, 0px),
+      calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)));
 }
+@media(max-width:600px) { .telegram-fullscreen { --game-mobile-header:56px } }
 .telegram-fullscreen body > .stats-bar { margin-top:var(--game-safe-top) }
 .telegram-fullscreen :is(#usernamesScreen,#collectionScreen,#ratingScreen,#checkScreen,#chancesScreen,
   #marketScreen,#profileScreen,#promoScreen,#gamesScreen,#upgradeGameScreen,
@@ -6090,21 +6099,22 @@ function updateMythicNumbers() {
     <main>
       <section class="panel rv" style="--d:.05s" id="identity-other"></section>
 
-      <section class="rv" style="--d:.1s">
+      <section class="rv" id="otherMainSection" style="--d:.1s" hidden>
         <div class="sec-head" style="padding:0 4px"><span id="ic-sim-other"></span><h2>Основной номер</h2></div>
         <div class="sim-wrap" id="otherMainSimWrap"></div>
       </section>
 
-      <section class="panel rv" style="--d:.15s;--tint:#59D6FF">
+      <section class="panel rv" id="otherHandlesSection" style="--d:.15s;--tint:#59D6FF" hidden>
         <div class="sec-head"><span id="ic-send-other"></span><h2>Telegram-юзы</h2><span class="sec-meta" id="otherHandlesCount"></span></div>
         <div class="handles" id="otherHandles"></div>
         <div class="hsum" id="otherHandlesSum"></div>
       </section>
 
-      <section class="panel rv" style="--d:.2s;--tint:#FFB020">
+      <section class="panel rv" id="otherNumbersSection" style="--d:.2s;--tint:#FFB020" hidden>
         <div class="sec-head"><span id="ic-layers-other"></span><h2>Номера игрока</h2><span class="sec-meta" id="otherNumbersCount"></span></div>
         <div class="num-list" id="otherNumbersList"></div>
       </section>
+      <section class="panel rv public-profile-empty" id="otherEmptyCollection" style="--d:.1s" hidden></section>
     </main>
   </div>
 
@@ -8491,6 +8501,13 @@ function getMainProfileNumber(){
   return savedNumbers.reduce((a,b)=> a.price > b.price ? a : b);
 }
 
+const profileSinceFormat = new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'long',year:'numeric',timeZone:'Europe/Moscow'});
+function profileSince(player) {
+  const time = player.created_at ? Date.parse(player.created_at) : NaN;
+  if (!Number.isFinite(time)) return '';
+  const note = player.joined_at_estimated ? ' title="По первому сохранившемуся событию"' : '';
+  return `<span class="public-profile-since"${note}>В игре с ${profileSinceFormat.format(time)}</span>`;
+}
 function updateProfileUI(){
   const me = allPlayers.find(p => p.isMe);
   if (!me) return;
@@ -8520,7 +8537,7 @@ function updateProfileUI(){
             ${telegramPreview ? '' : `<button class="idchip num" onclick="copyProfileId()">ID ${escHtml(me.id)} ${pIcon('copy',13)}</button>`}
             <span class="online"><i></i>онлайн</span>
           </div>
-          <div class="since">В игре с ${me.created_at ? new Date(me.created_at).toLocaleDateString('ru-RU') : '—'}</div>
+          ${me.created_at ? `<div class="since">${profileSince(me)}</div>` : ''}
         </div>
       </div><div class="profile-likes" data-profile-like="${telegramPreview ? 'self' : escHtml(me.id)}"></div>`;
     window.PROFILE_LIKES?.mount(identity.querySelector('[data-profile-like]'));
@@ -9689,8 +9706,13 @@ function configureTelegramHeader(app) {
     try { app.setHeaderColor?.(app.isVersionAtLeast?.('6.9') ? '#0b100e' : 'bg_color'); }
     catch (_) { /* Некоторые клиенты не поддерживают настройку цвета панели. */ }
     if (!app.isVersionAtLeast?.('8.0') || typeof app.requestFullscreen !== 'function') return;
-    const sync = () => document.documentElement.classList.toggle('telegram-fullscreen', app.isFullscreen === true);
-    app.onEvent?.('fullscreenChanged',sync);
+    const sync = () => {
+        const root = document.documentElement;
+        const top = (Number(app.safeAreaInset?.top) || 0) + (Number(app.contentSafeAreaInset?.top) || 0);
+        root.style?.setProperty('--game-tg-sdk-top',Math.max(0,top) + 'px');
+        root.classList.toggle('telegram-fullscreen',app.isFullscreen === true);
+    };
+    for (const event of ['fullscreenChanged','safeAreaChanged','contentSafeAreaChanged']) app.onEvent?.(event,sync);
     sync();
     if (!app.isFullscreen) {
         try { app.requestFullscreen(); }
@@ -9743,6 +9765,7 @@ async function startTelegramPreview() {
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
     let session = '', readOnly = false, walletScope = 'preview', originalPlayer, originalProfile, telegramIdentity, profileId;
     let gameOwner = false;
+    let joinedAt, joinedAtEstimated;
     let passCards = [], shopCards = [];
     let cardVault = null, vaultRequest;
     let buying = false;
@@ -9772,6 +9795,7 @@ async function startTelegramPreview() {
             op_name: String(row.op_name || operator?.name || 'SECRET').replace(/[<>"']/g, '') });
     }
     function renderWallet(player) {
+        if (!player.created_at) player = {...player,created_at:joinedAt,joined_at_estimated:joinedAtEstimated};
         if (telegramIdentity) {
             player = { ...player, telegram_username:telegramIdentity.username,
                 avatar_url:telegramIdentity.avatarUrl || player.avatar_url };
@@ -10132,6 +10156,8 @@ async function startTelegramPreview() {
         telegramIdentity = state.telegramProfile;
         profileId = state.profileId;
         gameOwner = state.gameOwner === true;
+        joinedAt = state.joinedAt;
+        joinedAtEstimated = state.joinedAtEstimated === true;
         const profile = state.linkedProfile ?? await api({ action: 'profile' });
         telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
             starsStatus, starsInvoice: (pack,requestId) => api({action:'stars-invoice',itemId:pack.id,revision:pack.revision,requestId,accepted:true}),
@@ -10325,17 +10351,17 @@ async function openOtherProfile(playerId, assets) {
     document.getElementById('identity-other').innerHTML = `
         <div class="id-top">
             <div class="avatar">
-                <div class="ph">${p.avatar_url ? `<img src="${escHtml(p.avatar_url)}" alt="" decoding="async">` : `<span class="fallback">${escHtml((p.name || 'И')[0].toUpperCase())}</span>`}</div>
+                <div class="ph"><span class="fallback">${escHtml(Array.from(p.name || 'И')[0].toUpperCase())}</span>${p.avatar_url ? `<img src="${escHtml(p.avatar_url)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
                 <span class="dot" aria-hidden="true"></span>
             </div>
             <div class="id-main">
                 <div class="name-row"><h1>${escHtml(p.name || 'Игрок')}</h1><span data-collector-player="${escHtml(p.id)}"></span>${hasDevGift(p) ? devGiftBadge(true) : ''}</div>
                 ${p.is_game_owner || tagList(p.tag).length ? `<div class="badge-row">${p.is_game_owner ? `<span class="badge-owner" style="--tc:#f0c468">${_pIcon('shield',11)}ВЛАДЕЛЕЦ</span>` : ''}${tagList(p.tag).filter(k => !p.is_game_owner || k !== 'owner').map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${_pIcon('shield', 11)}${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}</div>` : ''}
-                <div class="meta-row">
-                    <button class="idchip num" data-other-copy="${escHtml(p.id)}" aria-label="Скопировать ID">ID: ${escHtml(p.id)} ${_pIcon('copy', 13)}</button>
-                    <span class="online"><i></i>онлайн</span>
+                ${p.telegram_username ? `<div class="public-profile-username">@${escHtml(p.telegram_username)}</div>` : ''}
+                <div class="public-profile-info">
+                    ${profileSince(p)}
+                    <button class="idchip public-profile-id" type="button" data-other-copy="${escHtml(p.id)}" aria-label="Скопировать ID профиля">${_pIcon('copy',13)} ID</button>
                 </div>
-                <div class="since">В игре с ${p.created_at ? new Date(p.created_at).toLocaleDateString('ru-RU') : '—'}</div>
             </div>
         </div>
         <div class="profile-likes" data-profile-like="${telegramPreview && p.isMe ? 'self' : escHtml(p.id)}" data-can-vote="${telegramPreview ? !p.isMe : allPlayers.some(player => player.isMe && String(player.id) !== String(p.id))}"></div>
@@ -10352,6 +10378,11 @@ async function openOtherProfile(playerId, assets) {
     const handlesCount = document.getElementById('otherHandlesCount');
     const numList = document.getElementById('otherNumbersList');
     const numCount = document.getElementById('otherNumbersCount');
+    const mainSection = document.getElementById('otherMainSection');
+    const handlesSection = document.getElementById('otherHandlesSection');
+    const numbersSection = document.getElementById('otherNumbersSection');
+    const emptyCollection = document.getElementById('otherEmptyCollection');
+    for (const section of [mainSection,handlesSection,numbersSection,emptyCollection]) section.hidden = true;
     for (const node of [simWrap, handles, numList]) node.replaceChildren();
     handlesSum.style.display = 'none';
     handlesCount.textContent = numCount.textContent = '';
@@ -10389,10 +10420,8 @@ async function openOtherProfile(playerId, assets) {
     }));
     const mainNumber = safeNumbers.find(n => n.is_main) || safeNumbers.reduce((best, n) => !best || n.price > best.price ? n : best, null);
 
-    if (!mainNumber) {
-        simWrap.innerHTML = '<div class="panel" style="text-align:center;color:var(--muted-p);padding:24px;">Основной номер не выбран</div>';
-        simWrap.style.setProperty('--glow', 'transparent');
-    } else {
+    mainSection.hidden = !mainNumber;
+    if (mainNumber) {
         simWrap.style.setProperty('--glow', 'transparent');
         simWrap.innerHTML = profileCardHTML({
             formatted: mainNumber.formatted, op: mainNumber.op_name || 'SECRET', rarity: mainNumber.rarity, price: mainNumber.price, exc: mainNumber.exc, uid: mainNumber.unique_id,
@@ -10406,10 +10435,8 @@ async function openOtherProfile(playerId, assets) {
     const safeUzes = usernames || [];
     if (handlesCount) handlesCount.textContent = safeUzes.length;
 
-    if (safeUzes.length === 0) {
-        handles.innerHTML = '<div style="color:#7E89A6;font-size:13px;padding:12px;text-align:center;width:100%;">У игрока нет юзов</div>';
-        if (handlesSum) handlesSum.style.display = 'none';
-    } else {
+    handlesSection.hidden = !safeUzes.length;
+    if (safeUzes.length) {
         const pinNames = parsePinnedUz(p);
         const pinned = pinNames.map(n => safeUzes.find(u => u.name === n)).filter(Boolean);
         if (handlesCount && pinned.length) handlesCount.textContent = `${safeUzes.length} · ${pinned.length} в профиле`;
@@ -10432,8 +10459,15 @@ async function openOtherProfile(playerId, assets) {
     _otherSheet.numbers = safeNumbers;
     _otherSheet.usernames = safeUzes;
 
-    numCount.textContent = `${safeNumbers.length} шт`;
-    renderOtherProfileNumbers(screen, numList, safeNumbers);
+    numbersSection.hidden = !safeNumbers.length;
+    if (safeNumbers.length) {
+        numCount.textContent = `${safeNumbers.length} шт`;
+        renderOtherProfileNumbers(screen,numList,safeNumbers);
+    }
+    if (!safeNumbers.length && !safeUzes.length) {
+        emptyCollection.innerHTML = `${_pIcon('layers',18)}<span>У игрока пока нет номеров и юзов</span>`;
+        emptyCollection.hidden = false;
+    }
 }
 
 function renderOtherProfileNumbers(screen, list, numbers) {
