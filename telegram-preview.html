@@ -8199,6 +8199,7 @@ let forcedRarityKey = null;
         function modalSell(button, number = modalTargetNumber) {
             if (!number) return;
             if (isTrophyNumber(number)) { showToast('error', 'Этот номер нельзя продать', ''); return; }
+            if (number.isLocked) { showToast('error', 'Номер защищён', 'Сними защиту в коллекции'); return; }
             if (telegramPreview) return runRollAction(button, 'Продаём…', 'Ошибка продажи', () => telegramGame.sell([number]));
             return runRollAction(button, 'Продаём…', 'Ошибка продажи', async () => {
                 const player = allPlayers.find(p => p.isMe);
@@ -8669,17 +8670,18 @@ function renderProfileSheet(){
     const bg = POP_BG[opName] || '#333';
     const fg = POP_FG[opName] || '#fff';
     const short = POP_SHORT[opName] || opName.substring(0,3);
-    const isMain = main && main.formatted === n.formatted;
+    const isMain = main === n;
+    const numberKey = escHtml(n.id != null ? 'i' + n.id : 'u' + (n.uniqueId || n.formatted));
     return `<div class="num-row">
-      <span class="op-badge" style="background:${bg};color:${fg}">${short}</span>
+      <span class="op-badge" style="background:${bg};color:${fg}">${escHtml(short)}</span>
       <div class="ninfo">
-        <div class="ndigits num">${n.formatted}</div>
+        <div class="ndigits num">${escHtml(n.formatted)}</div>
         <div class="nmeta" style="--c:${r.color}"><span class="nr">${r.label}</span><span class="np num">${pFormat(n.price)}\u00A0₽</span></div>
       </div>
       <div class="nacts">
-        <button class="ibtn" onclick="copyProfileText('${n.formatted}')">${pIcon('copy',15)}</button>
-        ${isMain ? `<span class="ibtn star on">${pIcon('star',15)}</span>` : `<button class="ibtn star" onclick="setProfileMain('${n.formatted}')">${pIcon('star',15)}</button>`}
-        ${isTrophyNumber(n) ? '' : `<button class="sellbtn" onclick="sellFromProfile('${n.formatted}')">Продать</button>`}
+        <button type="button" class="ibtn" data-profile-copy="${numberKey}" aria-label="Скопировать номер">${pIcon('copy',15)}</button>
+        ${isMain ? `<span class="ibtn star on">${pIcon('star',15)}</span>` : `<button type="button" class="ibtn star" data-profile-main="${numberKey}" aria-label="Сделать основным">${pIcon('star',15)}</button>`}
+        ${isTrophyNumber(n) ? '' : `<button class="sellbtn" type="button" data-profile-sale="${numberKey}">Продать</button>`}
       </div>
     </div>`;
   }).join('');
@@ -9659,7 +9661,7 @@ async function startTelegramPreview() {
     updateRoamingLabel();
 
     const previewSafeActions = new Set(['close','close-drawer','sound','dismiss-hint','filter','cycle-sort',
-        'cx-view','cx-spin','open-number','copy-number','sec-reveal','sell-number','toggle-select',
+        'cx-view','cx-spin','cx-fav','cx-move','open-number','copy-number','sec-reveal','sell-number','toggle-select',
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
@@ -9681,6 +9683,7 @@ async function startTelegramPreview() {
         if (['pin','sell'].includes(target.dataset.cardAction) && telegramGame?.canRoll()) return;
         if (userNameActions.has(target.dataset.uz)) return;
         if (['slot','sell','bulk-sell'].includes(target.dataset.uz) && telegramGame?.canRoll()) return;
+        if (['set-main','toggle-lock','cx-bulk-lock'].includes(target.dataset.nx) && telegramGame?.canRoll()) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
         if (!target.closest('#menuSheet') && previewSafeActions.has(target.dataset.nx)) return;
         event.preventDefault();
@@ -9893,7 +9896,7 @@ async function startTelegramPreview() {
         try {
             const state = await api({ action, ...fields, requestId });
             pendingItems.delete(key);
-            if (action.startsWith('username-')) ratingProfiles.clear();
+            if (action.startsWith('username-') || action === 'number-main') ratingProfiles.clear();
             renderState(state);
             return state;
         } catch (error) {
@@ -11078,8 +11081,18 @@ function cxToggleFav(key) {
   const m = cxMeta(); m.fav[key] = !m.fav[key]; if (!m.fav[key]) delete m.fav[key]; cxSave(m);
   renderCollection(); if (NX.drawer === 'number') openNumber(key); sfx.tick();
 }
-async function cxBulkLock() {
+async function cxBulkLock(btn) {
   if (NX.busy) return;
+  if (telegramPreview) {
+    const numbers = bulkNumberItems();
+    if (!numbers.length) { fail('Выбери номера для защиты'); return; }
+    if (numbers.length !== NX.selected.size) { fail('Состав коллекции изменился. Выбери номера снова.'); return; }
+    const state = await changeNumberOptions('number-lock',{numberIds:numbers.map(n => n.id).sort(),locked:true},btn);
+    if (!state) return;
+    NX.selected.clear(); NX.select = false;
+    refreshAll(); sfx.tick(); toast(`Защищено: ${state.protectedCount}`);
+    return;
+  }
   const items = [...NX.selected].map(byKey).filter(n => n && !n.isLocked);
   NX.selected.clear(); NX.select = false;
   items.forEach(n => n.isLocked = true);
@@ -11157,16 +11170,46 @@ document.addEventListener('mythic-numbers-changed', () => {
   if (key && !byKey(key)) closeDrawer();
 });
 
-async function setMain(key) {
+async function changeNumberOptions(action, fields, btn) {
+  if (NX.busy) return null;
+  if (!telegramGame?.canRoll()) { fail('Открой игру из Telegram, чтобы изменить номер'); return null; }
+  busy(btn,true);
+  try {
+    return await telegramGame.trade(action,fields);
+  } catch (error) {
+    fail(esc(error.message || 'Не удалось сохранить изменения'));
+    return null;
+  } finally { busy(btn,false); }
+}
+function refreshNumberOptions(key) {
+  refreshAll();
+  const openedKey = $('#nxDrawer')?.querySelector('[data-nx="copy-number"]')?.dataset.key;
+  if (NX.drawer === 'number' && openedKey === key) openNumber(key);
+}
+async function setMain(key, btn) {
   const n = byKey(key), m = me(); if (!n || !m) return;
+  if (telegramPreview) {
+    if (!await changeNumberOptions('number-main',{numberId:n.id},btn)) return false;
+    sfx.ok(); refreshNumberOptions(key); toast('Основной номер обновлён');
+    return true;
+  }
   const prev = savedNumbers.filter(x => x.isMain && x !== n);
   savedNumbers.forEach(x => x.isMain = false); n.isMain = true;
   sfx.ok(); refreshAll(); if (NX.drawer === 'number') openNumber(key);
   toast('Основной номер обновлён');
   await writeFlags([...prev.map(x => ({ id: x.id, values: { is_main: false } })), { id: n.id, values: { is_main: true } }]);
+  return true;
 }
-async function toggleLock(key) {
+async function toggleLock(key, btn) {
   const n = byKey(key); if (!n) return;
+  if (telegramPreview) {
+    if (isTrophyNumber(n)) return;
+    const state = await changeNumberOptions('number-lock',{numberIds:[n.id],locked:!n.isLocked},btn);
+    if (!state) return;
+    sfx.tick(); refreshNumberOptions(key);
+    toast(byKey(key)?.isLocked ? 'Защита включена' : 'Защита снята');
+    return;
+  }
   n.isLocked = !n.isLocked;
   sfx.tick(); refreshAll(); if (NX.drawer === 'number') openNumber(key);
   toast(n.isLocked ? 'Защита включена' : 'Защита снята');
@@ -11686,6 +11729,7 @@ window.loadMarketLotsFromDB = async function () {
 // после загрузки номеров восстанавливаем «основной» и «защищён», если они хранились локально
 const _origLoadNumbers = window.loadNumbersFromDB;
 window.loadNumbersFromDB = async function () {
+  if (telegramPreview) return;
   await _origLoadNumbers.apply(this, arguments);
   applyLocalFlags();
   window.SG_REACTOR?.refresh();
@@ -11698,10 +11742,9 @@ window.getMainProfileNumber = function () {
   return savedNumbers.find(n => n.isMain) || savedNumbers.reduce((a, b) => (a.price > b.price ? a : b));
 };
 // звезда в шторке профиля теперь действительно делает номер основным
-window.setProfileMain = function (formatted) {
+window.setProfileMain = async function (formatted) {
   const n = savedNumbers.find(x => x.formatted === formatted); if (!n) return;
-  setMain(keyOf(n));
-  if (typeof closeProfileDrawer === 'function') closeProfileDrawer();
+  if (await setMain(keyOf(n)) && typeof closeProfileDrawer === 'function') closeProfileDrawer();
 };
 // продажа из профиля уважает защиту
 const _origSellFromProfile = window.sellFromProfile;
@@ -11728,6 +11771,21 @@ window.openProfile = function () {
 
 /* ═══════════ СОБЫТИЯ ═══════════ */
 document.addEventListener('click', e => {
+  const profileAction = e.target.closest('[data-profile-main], [data-profile-sale], [data-profile-copy]');
+  if (profileAction) {
+    if (profileAction.dataset.profileMain) {
+      void setMain(profileAction.dataset.profileMain,profileAction).then(changed => {
+        if (changed) closeProfileDrawer();
+      });
+    } else if (profileAction.dataset.profileCopy) {
+      const number = byKey(profileAction.dataset.profileCopy);
+      if (number) void copyProfileText(number.formatted);
+    } else {
+      const number = byKey(profileAction.dataset.profileSale);
+      if (number) void modalSell(null,number);
+    }
+    return;
+  }
   const t = e.target.closest('[data-nx]'); if (!t) return;
   const a = t.dataset.nx, key = t.dataset.key, id = t.dataset.id;
   switch (a) {
@@ -11740,7 +11798,7 @@ document.addEventListener('click', e => {
     case 'cx-view': NX.view = NX.view === 'grid' ? 'list' : 'grid'; LS.set('nx_view', NX.view); renderCollection(); sfx.tick(); break;
     case 'cx-spin': hide('collection'); sfx.tick(); break;
     case 'cx-sel-all': selectVisibleNumbers(); break;
-    case 'cx-bulk-lock': cxBulkLock(); break;
+    case 'cx-bulk-lock': cxBulkLock(t); break;
     case 'cx-fav': cxToggleFav(key); break;
     case 'cx-move': cxMove(key, Number(t.dataset.d) || 0); break;
     case 'sec-reveal': {
@@ -11756,8 +11814,8 @@ document.addEventListener('click', e => {
     case 'open-number': openNumber(key); break;
     case 'close-drawer': closeDrawer(); break;
     case 'copy-number': { const n = byKey(key); if (n) copyText(n.formatted); break; }
-    case 'set-main': setMain(key); break;
-    case 'toggle-lock': toggleLock(key); break;
+    case 'set-main': setMain(key,t); break;
+    case 'toggle-lock': toggleLock(key,t); break;
     case 'replace-digit': replaceDigit(key, t); break;
     case 'sell-number': sellNumbers([byKey(key)], t); break;
     case 'check-tab': NX.checkTab = t.dataset.tab; $('#nxCheckInput').value = ''; $('#nxCheckResult').classList.remove('show'); renderCheck(); sfx.tick(); break;
