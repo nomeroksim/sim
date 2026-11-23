@@ -9787,11 +9787,24 @@ async function startTelegramPreview() {
     let tagVersion = 0;
     let changingTag = false;
     async function api(body) {
-        const response = await fetch(endpoint, {
-            method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, cache: 'no-store',
-            signal: AbortSignal.timeout(18000), body: JSON.stringify({ ...body, session, walletScope })
-        });
-        const result = await response.json().catch(() => null);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 18000);
+        let response, result;
+        try {
+            response = await fetch(endpoint, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, cache: 'no-store',
+                signal: controller.signal, body: JSON.stringify({ ...body, session, walletScope })
+            });
+            result = await response.json().catch(error => {
+                if (controller.signal.aborted) throw error;
+                return null;
+            });
+        } catch (error) {
+            const message = controller.signal.aborted ? 'Сервер игры не ответил вовремя.' : 'Не удалось подключиться к серверу игры.';
+            throw Object.assign(new Error(message), { status:503 });
+        } finally {
+            clearTimeout(timeout);
+        }
         if (response.ok && result) return result;
         throw Object.assign(new Error(result?.error || 'Сервер игры временно недоступен.'), { status: response.status });
     }
@@ -9806,6 +9819,7 @@ async function startTelegramPreview() {
     }
     function renderWallet(player) {
         if (!player.created_at) player = {...player,created_at:joinedAt,joined_at_estimated:joinedAtEstimated};
+        player = {...player,public_id:publicId};
         if (telegramIdentity) {
             player = { ...player, telegram_username:telegramIdentity.username,
                 avatar_url:telegramIdentity.avatarUrl || player.avatar_url };
@@ -9931,7 +9945,7 @@ async function startTelegramPreview() {
         telegramUsernames(state.usernames);
         renderWallet({ id:profileId, ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             main_uz:pinnedUz.join(',') || null, second_uz:null,
-            rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0, public_id:publicId });
+            rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
         if (state.pass) acceptPass(state.pass);
         else renderTelegramCards();
         updateRollButtons();
