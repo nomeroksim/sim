@@ -9634,8 +9634,9 @@ async function startTelegramPreview() {
         'cx-view','cx-spin','open-number','copy-number','sec-reveal','sell-number','toggle-select',
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
-        'reload-card-shop','shop-card-details','shop-filter','buy-card']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()']);
+        'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
+        'submit-list-number','buy-lot','confirm-buy','cancel-lot']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -9657,6 +9658,7 @@ async function startTelegramPreview() {
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
     let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer, originalProfile;
     let buying = false;
+    let walletVersion = 0;
     let pendingRoll = null;
     const pendingItems = new Map();
     async function api(body) {
@@ -9691,6 +9693,7 @@ async function startTelegramPreview() {
         updateRollButtons();
     }
     function renderState(state) {
+        walletVersion++;
         walletScope = state.walletScope || 'preview';
         const selected = currentRolledNumber?.id;
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
@@ -9703,6 +9706,7 @@ async function startTelegramPreview() {
     }
     async function renderLinked(profile, state) {
         linked = true;
+        walletVersion++;
         readOnly = true;
         refreshRollActions();
         originalPlayer = profile.player;
@@ -9748,6 +9752,33 @@ async function startTelegramPreview() {
             const state = await api({ action, ...fields });
             renderState(state);
             return state;
+        } finally { buying = false; }
+    }
+
+    async function market() {
+        const version = walletVersion;
+        const { lots, wallet } = await api({ action:'market' });
+        if (wallet && version === walletVersion && !buying && !isRolling && !rollActionBusy && !readOnly) {
+            const player = allPlayers.find(item => item.isMe);
+            if (player) renderWallet({ ...player, balance:wallet.balance, user_crystals:wallet.crystals });
+        }
+        return lots;
+    }
+
+    async function trade(action, fields) {
+        if (readOnly) throw new Error('Торговля доступна после переноса профиля.');
+        if (isRolling || rollActionBusy || buying || bindButton.disabled) throw new Error('Дождись завершения текущей операции.');
+        const key = action + ':' + JSON.stringify(fields);
+        const requestId = pendingItems.get(key) || crypto.randomUUID();
+        pendingItems.set(key, requestId);
+        buying = true;
+        try {
+            const state = await api({ action, ...fields, requestId });
+            pendingItems.delete(key);
+            renderState(state);
+        } catch (error) {
+            if (error.status >= 400 && error.status < 500) pendingItems.delete(key);
+            throw error;
         } finally { buying = false; }
     }
     async function changeItems(action, numbers) {
@@ -9835,7 +9866,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, market, trade, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -10676,9 +10707,11 @@ window.closeCollection = () => hide('collection');
 window.openCheckNumber = () => show('check');
 window.closeCheckNumber = () => hide('check');
 window.openMarket = () => {
+  if (telegramPreview && !telegramGame) { fail('Дождись входа через Telegram'); return; }
   show('market');
   // свежие лоты при каждом открытии маркета, без блокировки экрана
-  if (typeof loadMarketLotsFromDB === 'function') loadMarketLotsFromDB().then(() => { if (NX.screen === 'market') renderMarket(); });
+  if (typeof loadMarketLotsFromDB === 'function') loadMarketLotsFromDB().then(() => { if (NX.screen === 'market') renderMarket(); })
+    .catch(error => { if (NX.screen === 'market') fail(error.message || 'Не удалось открыть маркет'); });
 };
 window.closeMarket = () => hide('market');
 // старые точки входа теперь просто перерисовывают новые экраны (если они открыты)
@@ -11233,14 +11266,18 @@ function renderBalances() {
 }
 function renderMarket() {
   renderBalances();
-  $('#nxMarketSeg').innerHTML = MARKET_TABS.map(t => `<button class="${NX.marketTab === t.id ? 'on' : ''}" data-nx="market-tab" data-tab="${t.id}">${ic(t.icon, 15)}${t.label}</button>`).join('');
+  const tabs = telegramPreview ? MARKET_TABS.filter(tab => tab.id !== 'uz') : MARKET_TABS;
+  if (telegramPreview && NX.marketTab === 'uz') NX.marketTab = 'all';
+  const listUzButton = telegramPreview && document.querySelector('[data-nx="list-uz"]');
+  if (listUzButton) listUzButton.style.display = 'none';
+  $('#nxMarketSeg').innerHTML = tabs.map(t => `<button class="${NX.marketTab === t.id ? 'on' : ''}" data-nx="market-tab" data-tab="${t.id}">${ic(t.icon, 15)}${t.label}</button>`).join('');
   let lots = [...(marketLots || [])];
   if (NX.marketTab === 'numbers') lots = lots.filter(l => l.type === 'number');
   else if (NX.marketTab === 'uz') lots = lots.filter(isNickLot);
   else if (NX.marketTab === 'my') lots = lots.filter(l => l.isMine);
   const grid = $('#nxMarketGrid');
   if (!lots.length) {
-    grid.innerHTML = `<div class="nx-empty">${ic('market', 36)}<b>Здесь пока нет лотов</b><span>${NX.marketTab === 'my' ? 'Выстави свой номер или юз — кнопками выше' : 'Загляни позже или выстави свой актив'}</span></div>`;
+    grid.innerHTML = `<div class="nx-empty">${ic('market', 36)}<b>Здесь пока нет лотов</b><span>${NX.marketTab === 'my' ? (telegramPreview ? 'Выстави номер из коллекции' : 'Выстави свой номер или юз — кнопками выше') : 'Загляни позже или выстави свой актив'}</span></div>`;
     return;
   }
   grid.innerHTML = lots.map(l => {
@@ -11300,12 +11337,30 @@ async function claimLot(lotId, status) {
   if (r.error) return { error: r.error };
   return { ok: r.count == null ? true : r.count > 0 };
 }
+async function tradeInTelegram(action, fields, btn, message) {
+  busy(btn, true);
+  try {
+    await telegramGame.trade(action, fields);
+    if (action === 'market-list') NX.marketTab = 'my';
+    closeDrawer();
+    refreshAll();
+    sfx.ok();
+    toast(message);
+  } catch (error) {
+    fail(error.message || 'Операция не подтверждена');
+  } finally {
+    busy(btn, false);
+    try { await loadMarketLotsFromDB(); renderMarket(); }
+    catch (_) { fail('Не удалось обновить витрину'); }
+  }
+}
 async function buyLot(id, btn) {
   const l = (marketLots || []).find(x => String(x.id) === String(id)), m = me();
   if (!l || !m || NX.busy || l.isMine) return;
   const isNum = l.type === 'number';
   if (isNum && isTrophyNumber(lotNum(l))) { fail('Этот номер нельзя купить'); return; }
   if (isNum ? balance < l.price : userCrystals < l.price) { fail(isNum ? 'Недостаточно рублей' : 'Недостаточно кристаллов'); return; }
+  if (telegramPreview) return tradeInTelegram('market-buy', {lotId:l.id,price:l.price}, btn, 'Номер добавлен в коллекцию');
   busy(btn, true);
   const done = async ok => { busy(btn, false); await loadMarketLotsFromDB(); renderMarket(); if (ok) closeDrawer(); };
   const c = await claimLot(l.id, 'sold');
@@ -11348,11 +11403,15 @@ async function buyLot(id, btn) {
 }
 async function submitListNumber(btn) {
   const m = me(); if (!m || NX.busy) return;
-  const n = byKey($('#nxListNum').value), price = parseInt($('#nxListNumPrice').value, 10);
+  const n = byKey($('#nxListNum').value), price = telegramPreview ? Number($('#nxListNumPrice').value) : parseInt($('#nxListNumPrice').value, 10);
   if (!n) return;
   if (isTrophyNumber(n)) { showToast('error', 'Этот номер нельзя продать', ''); return; }
   if (!price || price < 1) { fail('Укажи цену'); return; }
   if (n.isLocked) { fail('Номер защищён'); return; }
+  if (telegramPreview) {
+    if (!Number.isSafeInteger(price)) { fail('Укажи целую цену'); return; }
+    return tradeInTelegram('market-list', {numberId:n.id,price}, btn, 'Номер выставлен на маркет');
+  }
   busy(btn, true);
   const { error } = await _supabase.from('market_lots').insert([{
     seller_id: m.id, type: 'number', price, number_id: n.id ?? null,
@@ -11389,6 +11448,7 @@ async function submitListUz(btn) {
 async function cancelLot(id, btn) {
   const l = (marketLots || []).find(x => String(x.id) === String(id)), m = me();
   if (!l || !m || NX.busy || !l.isMine) return;
+  if (telegramPreview) return tradeInTelegram('market-cancel', {lotId:l.id}, btn, 'Лот снят, номер вернулся в коллекцию');
   busy(btn, true);
   let c = await claimLot(l.id, 'cancelled');
   if (c.error) { // если статус «cancelled» база не принимает — удаляем лот
@@ -11417,6 +11477,7 @@ async function cancelLot(id, btn) {
 /* ═══════════ ДАННЫЕ ИГРЫ: доработки ═══════════ */
 // лоты маркета: сохраняем продавца (раньше терялся, и продавец номера не получал деньги)
 window.loadMarketLotsFromDB = async function () {
+  if (telegramPreview) { marketLots = await telegramGame.market(); return; }
   const { data, error } = await _supabase.from('market_lots').select('*').eq('status', 'active').order('created_at', { ascending: false });
   if (error) { console.error('loadMarket', error); return; }
   const m = me();
