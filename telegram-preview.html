@@ -9628,11 +9628,11 @@ async function startTelegramPreview() {
     balanceBox.after(notice);
     document.getElementById('roamButton').disabled = true;
     document.getElementById('tariffButton').disabled = true;
-    selectedRoaming = '7';
     updateRoamingLabel();
 
     const previewSafeActions = new Set(['close','close-drawer','sound','dismiss-hint','filter','cycle-sort',
-        'cx-view','cx-spin','open-number','copy-number','sec-reveal']);
+        'cx-view','cx-spin','open-number','copy-number','sec-reveal','sell-number','toggle-select',
+        'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell']);
     const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, [data-nx]');
@@ -9646,13 +9646,13 @@ async function startTelegramPreview() {
     refreshRollActions();
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
-    let session = '', linked = false;
+    let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer;
     let pendingRoll = null;
     const pendingItems = new Map();
     async function api(body) {
         const response = await fetch(endpoint, {
             method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, cache: 'no-store',
-            signal: AbortSignal.timeout(18000), body: JSON.stringify({ ...body, session })
+            signal: AbortSignal.timeout(18000), body: JSON.stringify({ ...body, session, walletScope })
         });
         const result = await response.json().catch(() => null);
         if (response.ok && result) return result;
@@ -9662,8 +9662,10 @@ async function startTelegramPreview() {
     function rolledNumber(row) {
         const parsed = parseSpinNumber(row.formatted);
         const operator = parsed && DEFAULT_OPERATORS.find(op => op.code === parsed.code);
-        return mapPlayerNumber({ ...row, digits: parsed?.digits.join('') || row.formatted,
-            op_code: parsed?.code || '-', op_name: operator?.name || 'SECRET' });
+        return mapPlayerNumber({ ...row, formatted: String(row.formatted).replace(/[<>]/g, ''),
+            digits: row.digits || parsed?.digits.join('') || row.formatted,
+            op_code: row.op_code || parsed?.code || '-',
+            op_name: String(row.op_name || operator?.name || 'SECRET').replace(/[<>"']/g, '') });
     }
     function renderWallet(player) {
         allPlayers = [{ ...player, isMe: true }];
@@ -9673,22 +9675,36 @@ async function startTelegramPreview() {
         updateBalance();
         updateSpinPlayer(allPlayers[0]);
         updateProfileUI();
-        document.getElementById('tariffButton').disabled = linked;
+        document.getElementById('tariffButton').disabled = readOnly;
+        document.getElementById('roamButton').disabled = readOnly;
         refreshRollActions();
         updateRollButtons();
     }
     function renderState(state) {
+        walletScope = state.walletScope || 'preview';
         const selected = currentRolledNumber?.id;
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
-        renderWallet({ name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
+        renderWallet({ ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             rounds: state.player.rounds, xp: state.player.xp });
         updateCollection();
         renderMiniCards();
     }
-    function renderLinked(profile) {
+    async function renderLinked(profile, state) {
         linked = true;
+        readOnly = true;
+        refreshRollActions();
+        originalPlayer = profile.player;
+        bind.hidden = true;
+        code.value = '';
+        if (state?.walletScope === 'original' || profile.canActivate) {
+            const imported = state?.walletScope === 'original' ? state : await api({ action: 'activate-original' });
+            readOnly = false;
+            renderState(imported);
+            notice.textContent = 'Прежний профиль подключён. Крутки и коллекция используют перенесённый баланс.';
+            return;
+        }
         recentNumbers = [];
         currentRolledNumber = null;
         savedNumbers = profile.numbers.map(row => mapPlayerNumber({ ...row,
@@ -9699,17 +9715,19 @@ async function startTelegramPreview() {
         renderMiniCards();
         notice.textContent = 'Прежний профиль привязан. Баланс и коллекция доступны для просмотра.';
     }
-    async function changeItem(action, number) {
-        if (linked) throw new Error('Изменение прежней коллекции пока недоступно.');
+    async function changeItems(action, numbers) {
+        if (readOnly) throw new Error('Изменение прежней коллекции пока недоступно.');
         if (bindButton.disabled) throw new Error('Дождись завершения привязки профиля.');
-        const key = action + ':' + number.id;
+        const ids = numbers.map(number => number.id).sort();
+        const key = action + ':' + ids.join(',');
         const requestId = pendingItems.get(key) || crypto.randomUUID();
         pendingItems.set(key, requestId);
         try {
-            const state = await api({ action, numberId: number.id, requestId });
+            const target = action === 'sell-many' ? { numberIds: ids } : { numberId: ids[0] };
+            const state = await api({ action, ...target, requestId });
             pendingItems.delete(key);
-            if (modalTargetNumber?.id === number.id) closeChoiceModal();
-            if (dropPendingNumber?.id === number.id) closeDropOverlay();
+            if (ids.includes(modalTargetNumber?.id)) closeChoiceModal();
+            if (ids.includes(dropPendingNumber?.id)) closeDropOverlay();
             renderState(state);
             return state;
         } catch (error) {
@@ -9718,17 +9736,18 @@ async function startTelegramPreview() {
         }
     }
     async function roll(count) {
-        if (linked || isRolling || rollActionBusy || bindButton.disabled) return;
+        if (readOnly || isRolling || rollActionBusy || bindButton.disabled) return;
         isRolling = true;
         document.getElementById('tariffButton').disabled = true;
+        document.getElementById('roamButton').disabled = true;
         refreshRollActions();
         try {
-            pendingRoll ||= { action: 'roll', tariff: selectedTariff, count, requestId: crypto.randomUUID() };
+            pendingRoll ||= { action: 'roll', tariff: selectedTariff, count, roaming: selectedRoaming, requestId: crypto.randomUUID() };
             const state = await api(pendingRoll);
             pendingRoll = null;
             window.NXScreens?.rollSound.prepare();
             const results = state.rolled.map(rolledNumber);
-            for (const result of results) await animateRollResult(result, false, '7');
+            for (const result of results) await animateRollResult(result, false, parseSpinNumber(result.formatted)?.prefix || selectedRoaming);
             currentRolledNumber = results.at(-1);
             renderState(state);
             const best = results.reduce((a, b) => RARITIES.indexOf(a.rarity) < RARITIES.indexOf(b.rarity) ? a : b);
@@ -9738,7 +9757,8 @@ async function startTelegramPreview() {
             showToast('error', error.status ? error.message : 'Не удалось связаться с сервером', '');
         } finally {
             isRolling = false;
-            document.getElementById('tariffButton').disabled = linked;
+            document.getElementById('tariffButton').disabled = readOnly;
+            document.getElementById('roamButton').disabled = readOnly;
             refreshRollActions();
         }
     }
@@ -9758,9 +9778,7 @@ async function startTelegramPreview() {
         bindButton.disabled = true;
         try {
             const profile = await api({ action: 'link-profile', code: code.value.trim() });
-            renderLinked(profile);
-            bind.hidden = true;
-            code.value = '';
+            await renderLinked(profile);
         } catch (error) {
             showToast('error', error.message, '');
         } finally { bindButton.disabled = false; }
@@ -9782,15 +9800,15 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, canRoll: () => !linked, save: async number => {
-            await changeItem('save', number);
+        telegramGame = { roll, canRoll: () => !readOnly, save: async number => {
+            await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
-            let credited = 0;
-            for (const number of numbers) credited += (await changeItem('sell', number)).credited;
+            if (!numbers.length) return;
+            const { credited } = await changeItems('sell-many', numbers);
             showToast('success', 'Продажа завершена', '+' + formatPrice(credited));
         } };
-        if (profile.linked) renderLinked(profile);
+        if (profile.linked) await renderLinked(profile, state);
         else {
             renderState(state);
             bind.hidden = false;
@@ -10927,6 +10945,22 @@ async function completeBulkSale(button) {
   }
   button.disabled = true;
   busy(button,true);
+  if (telegramPreview) {
+    try {
+      await telegramGame.sell(items);
+      NX.selected.clear();
+      NX.select = false;
+      closeDrawer();
+      sfx.coin();
+    } catch (error) {
+      fail(error.message);
+    } finally {
+      busy(button,false);
+      button.disabled = false;
+      refreshAll();
+    }
+    return;
+  }
   const task = _saveChain.then(async () => {
     await _saveBalanceNow();
     const before = balance, beforeCrystals = userCrystals;
@@ -10978,6 +11012,22 @@ async function sellNumbers(list, btn) {
   if (list.some(isTrophyNumber)) { showToast('error', 'Этот номер нельзя продать', ''); return; }
   const items = list.filter(n => n && !n.isLocked);
   if (!items.length) { fail(list.length > 1 ? 'Выбранные номера защищены' : 'Номер защищён'); return; }
+  if (telegramPreview) {
+    busy(btn, true);
+    try {
+      await telegramGame.sell(items);
+      NX.selected.clear();
+      NX.select = false;
+      if (NX.drawer) closeDrawer();
+      sfx.coin();
+    } catch (error) {
+      fail(error.message);
+    } finally {
+      busy(btn, false);
+      refreshAll();
+    }
+    return;
+  }
   busy(btn, true);
   const ids = items.filter(n => n.id != null).map(n => n.id);
   if (ids.length) {
