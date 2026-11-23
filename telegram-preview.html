@@ -9636,14 +9636,15 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
         if (!target) return;
         if (target.dataset.pvp === 'open' && telegramGame?.canRoll()) return;
         if (target.id === 'openGameRules') return;
-        if (target.dataset.cardAction === 'collection' && linked) return;
+        if (target.id === 'openRewardInbox' && telegramGame) return;
+        if (target.dataset.cardAction === 'collection' && telegramGame) return;
         if (target.dataset.nx === 'open-card-shop' && telegramGame) return;
         if (['filter','open','close-collection','close'].includes(target.dataset.cardAction)) return;
         if (userNameActions.has(target.dataset.uz)) return;
@@ -9657,6 +9658,7 @@ async function startTelegramPreview() {
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
     let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer, originalProfile;
+    let passCards = [], shopCards = [];
     let buying = false;
     let walletVersion = 0;
     let pendingRoll = null;
@@ -9699,16 +9701,44 @@ async function startTelegramPreview() {
         }));
         if (document.getElementById('usernamesScreen')?.classList?.contains('active')) renderUsernames();
     }
+
+    function renderTelegramCards() {
+        const player = allPlayers.find(item => item.isMe);
+        if (!player) return;
+        window.COLLECTOR_CARDS?.setTelegramCollection({ ...originalProfile, player,
+            cards:[...(originalProfile?.cards || []), ...shopCards, ...passCards] });
+    }
+    function acceptPass(pass) {
+        if (!pass) return;
+        freeRolls = pass.freeRolls;
+        for (const key of Object.keys(luckBoost)) luckBoost[key] = Number(pass.luck[key]) || 0;
+        updateLuckUI();
+        if (getActiveBoost()) startLuckTimer();
+        passCards = pass.cards || [];
+        const player = allPlayers.find(item => item.isMe);
+        if (player && pass.equipped.tag) player.tag = [...new Set([...tagList(player.tag),'legend'])].join(',');
+        renderTelegramCards();
+        window.TELEGRAM_PASS?.accept(pass);
+    }
     function renderState(state) {
         walletVersion++;
-        walletScope = state.walletScope || 'preview';
+        const scope = state.walletScope || 'preview';
+        if (scope !== walletScope) {
+            passCards = []; shopCards = []; freeRolls = 0;
+            for (const key of Object.keys(luckBoost)) luckBoost[key] = 0;
+            window.TELEGRAM_PASS?.clear();
+        }
+        walletScope = scope;
         const selected = currentRolledNumber?.id;
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
         telegramUsernames(state.usernames);
-        renderWallet({ ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
+        renderWallet({ id:'tg-preview', ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
+        if (state.pass) acceptPass(state.pass);
+        else renderTelegramCards();
+        updateRollButtons();
         updateCollection();
         renderMiniCards();
     }
@@ -9744,9 +9774,17 @@ async function startTelegramPreview() {
 
     async function store() {
         const data = await api({ action:'store' });
-        if (originalProfile) window.COLLECTOR_CARDS?.setTelegramCollection({ ...originalProfile,
-            cards:[...originalProfile.cards, ...data.owned] });
+        shopCards = data.owned || [];
+        renderTelegramCards();
         return data;
+    }
+    async function passStatus() {
+        const version = walletVersion;
+        const { pass } = await api({ action:'pass' });
+        if (version === walletVersion && !readOnly) {
+            acceptPass(pass);
+            updateRollButtons();
+        }
     }
 
     async function buyStore(action, fields) {
@@ -9879,7 +9917,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, auction, trade, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -14980,6 +15018,7 @@ function fresh() {
 }
 let S = null, SKEY = null;
 function st() {
+  if (telegramPreview) return S ||= fresh();
   const k = 'bp_s04_' + pid(); // ключ хранения прежний — прогресс игроков не теряется
   if (S && SKEY === k) { rollover(); return S; }
   SKEY = k;
@@ -15001,8 +15040,9 @@ function st() {
   rollover(); syncAuto(); save(); applyEquip();
   return S;
 }
-function save() { if (!S || !SKEY || SKEY.endsWith('guest')) return; try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) {} }
+function save() { if (telegramPreview || !S || !SKEY || SKEY.endsWith('guest')) return; try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) {} }
 function rollover() {
+  if (telegramPreview) return false;
   let changed = false;
   if (!S.taskResetAt || typeof S.taskResetAt !== 'object') {
     S.taskResetAt = {};
@@ -15030,6 +15070,16 @@ function rollover() {
 function applyEquip() {
   ['chip', 'holo', 'frame'].forEach(k => document.body.classList.toggle('bp-eq-' + k, !!(S && S.equipped[k])));
 }
+
+window.TELEGRAM_PASS = {
+  clear() { S = null; applyEquip(); },
+  accept(pass) {
+    S = { ...pass, taskTab:S?.taskTab || 'daily', sound:S?.sound ?? true };
+    applyEquip();
+    if (isOpen()) renderAll();
+    updateBadge();
+  }
+};
 
 /* ═════════ ИКОНКИ ═════════ */
 const I = {
@@ -15172,7 +15222,7 @@ function inboxRewards() {
   for (const item of S.inventory) {
     stored.add(item.track + item.lvl);
     const row = { ...rewardMeta(item.r), source:passRewardSource(item.lvl,item.track),
-      track:item.track, lvl:item.lvl, at:item.usedAt || 0, got:item.got, reward:item.r, kind:'item', id:item.id,
+      track:item.track, lvl:item.lvl, at:item.usedAt || 0, got:item.got, reward:item.r, kind:'item', id:item.id, cardId:item.cardId,
       cosmetic:item.used && ['chip','holo','frame'].includes(item.r.type) ? item.r.type : '',
       action:item.r.type === 'mysteryCard' ? 'Открыть' : isApplyType(item.r) ? 'Применить' : 'Забрать' };
     (item.used ? history : ready).push(row);
@@ -15223,7 +15273,8 @@ function renderRewardInbox() {
   }
   list.innerHTML = rows.map(row => {
     const cardArt = !available && row.reward?.type === 'mysteryCard'
-      ? window.COLLECTOR_CARDS?.passRewardArtwork(me()?.id,SEASON_ID,row.lvl,row.track) : '';
+      ? (telegramPreview ? window.COLLECTOR_CARDS?.telegramOwnedArtwork(me()?.id,row.cardId)
+        : window.COLLECTOR_CARDS?.passRewardArtwork(me()?.id,SEASON_ID,row.lvl,row.track)) : '';
     const art = cardArt || (row.reward ? rewardVisual(row.reward,row.got) :
       `<span class="reward-inbox-icon">${ic(row.icon || 'gift',26)}</span>`);
     const action = available
@@ -15249,6 +15300,7 @@ function openRewardInbox(fromMenu) {
   $('#rewardInboxStatus').dataset.kind = '';
   renderRewardInbox();
   dialog.showModal();
+  if (telegramPreview && telegramGame) void telegramGame.passStatus().catch(e => toast(esc(e.message), 'err'));
   $('#rewardInboxList').scrollTop = 0;
 }
 let rewardRevealTimer;
@@ -15497,14 +15549,19 @@ async function useItem(id, btn) {
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   try {
     let card, got;
-    if (r.type === 'mysteryCard') {
+    if (telegramPreview) {
+      if (r.type === 'mysteryCard') startMysteryReveal(r);
+      const result = await telegramGame.trade('pass-use', {itemId:id});
+      got = result.label;
+      if (result.card) card = {name:result.label,art:window.COLLECTOR_CARDS?.telegramCardArtwork(result.card)};
+    } else if (r.type === 'mysteryCard') {
       startMysteryReveal(r);
       card = await grantMysteryReward(it);
       got = card.name;
     } else {
       got = await applyReward(r);
     }
-    it.used = true; it.got = got || null; it.usedAt = now();
+    if (!telegramPreview) { it.used = true; it.got = got || null; it.usedAt = now(); }
     save(); if (isOpen()) renderAll(); updateBadge();
     if (card) finishMysteryReveal(card);
     const special = ['sim','uz','chip','holo','frame','tag','mysteryCard'].includes(r.type);
@@ -15569,6 +15626,7 @@ function showLevelUp(l) {
 let inClaim = false;
 // вызывается из игры: bpEvent('spin', 5), bpEvent('save'), bpEvent('sell', 2) ...
 window.bpEvent = function (act, n = 1) {
+  if (telegramPreview) return;
   try {
     if (!me()) return;
     st(); n = Math.max(1, Math.floor(Number(n) || 1));
@@ -15677,8 +15735,11 @@ function queuePassReward(lvl, track, mystery) {
   save();
   return id;
 }
-function queueMysteryCard(lvl, track) {
-  if (!queuePassReward(lvl,track,true)) return;
+async function queueMysteryCard(lvl, track) {
+  try {
+    if (telegramPreview) await telegramGame.trade('pass-queue', {level:lvl,track});
+    else if (!queuePassReward(lvl,track,true)) return;
+  } catch (e) { sfx.err(); toast(esc(e.message), 'err'); return; }
   closeDrawer();
   if (isOpen()) renderAll();
   updateBadge();
@@ -15686,15 +15747,25 @@ function queueMysteryCard(lvl, track) {
   toast('Закрытая карточка отправлена в «Награды»', 'gold');
 }
 async function claimReward(lvl, track, btn) {
-  const id = queuePassReward(lvl,track,false);
+  let id;
+  try {
+    id = telegramPreview ? (await telegramGame.trade('pass-queue', {level:lvl,track})).itemId : queuePassReward(lvl,track,false);
+  } catch (e) { sfx.err(); toast(esc(e.message), 'err'); return; }
   if (!id) return;
   await useItem(id,btn);
   updateBadge();
 }
-function claimTask(id) {
+async function claimTask(id) {
   st();
   const def = TASK_DEFS.find(t => t.id === id), s = S.tasks[id];
   if (!me() || !def || !s || s.claimed || s.prog < def.need || ended() || S.level >= MAX_LVL) return;
+  if (telegramPreview) {
+    try {
+      const state = await telegramGame.trade('pass-task', {taskId:id});
+      sfx.coin(); toast('Задание выполнено · +' + state.xpGained + ' XP', 'gold');
+    } catch (e) { sfx.err(); toast(esc(e.message), 'err'); }
+    return;
+  }
   s.claimed = true;
   const xp = taskRewardXp(def);
   rememberReward({id:'task:' + SEASON_ID + ':' + id + ':' + (S.taskResetAt[def.cat] || 0), name:def.title,
@@ -15770,6 +15841,7 @@ function activatePremium(plan, source) {
 }
 let grantBusy = false;
 async function applyGrants() {
+  if (telegramPreview) return;
   const m = me(); if (grantBusy || !m || !window.AR_RAW) return;
   const rows = window.AR_RAW.filter(r => r.status === 'active' && r.number_data && r.number_data.kind === 'bpgrant' && String(r.seller_id) === String(m.id) && ['01', '04'].includes(r.number_data.season || SEASON_ID));
   if (!rows.length) return;
@@ -15826,6 +15898,15 @@ async function buyLevels(n, btn) {
   const cost = k * LVL_COST;
   if (userCrystals < cost) { sfx.err(); toast(`Не хватает ${cry(cost - userCrystals)}`, 'err'); return; }
   buying = true; if (btn) btn.classList.add('busy');
+  if (telegramPreview) {
+    try {
+      const state = await telegramGame.trade('pass-levels', {levels:n});
+      showLevelUp(S.level); sfx.level(); burst(90); scrollToLevel(S.level);
+      toast('Уровней получено: ' + state.levelsBought, 'gold');
+    } catch (e) { sfx.err(); toast(esc(e.message), 'err'); }
+    finally { buying = false; if (btn) btn.classList.remove('busy'); }
+    return;
+  }
   userCrystals -= cost; refreshGameUI(); saveBalanceToDB();
   S.level += k; if (S.level >= MAX_LVL) S.xp = 0;
   syncAuto(); save(); renderAll(); updateBadge();
@@ -15838,9 +15919,11 @@ function closeAll() { closeDrawer(); closePremium(); }
 
 /* ═════════ ОТКРЫТИЕ / ЗАКРЫТИЕ ═════════ */
 window.openBattlePass = function () {
+  if (telegramPreview && !telegramGame) return;
   if (typeof closeMenu === 'function') closeMenu();
   st(); renderAll();
   const scr = $('#bpScreen'); scr.classList.add('active'); scr.setAttribute('aria-hidden', 'false'); scr.scrollTop = 0;
+  if (telegramPreview) void telegramGame.passStatus().catch(e => toast(esc(e.message), 'err'));
   requestAnimationFrame(() => { if (isOpen()) scrollToLevel(S.level,false); });
 };
 window.closeBattlePass = function () {
@@ -15910,6 +15993,11 @@ $('#rewardInbox').addEventListener('click', async event => {
     const item = S.inventory.find(row => row.id === equip.dataset.rewardEquip && row.used);
     const type = item?.r.type;
     if (!['chip','holo','frame'].includes(type)) return;
+    if (telegramPreview) {
+      try { await telegramGame.trade('pass-equip', {itemId:item.id}); toast(S.equipped[type] ? 'Оформление надето' : 'Оформление снято'); }
+      catch (e) { sfx.err(); toast(esc(e.message), 'err'); }
+      return;
+    }
     S.equipped[type] = !S.equipped[type];
     applyEquip();
     save();
@@ -15964,9 +16052,15 @@ addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => {
   renderTrack();
 },150); },{passive:true});
 document.addEventListener('visibilitychange', () => { if (document.hidden && confRaf !== null) stopPassConfetti(); });
+let lastPassResetCheck = 0;
 setInterval(() => {
   if (!S || document.hidden) return;
   if (rollover()) { if (isOpen()) renderAll(); updateBadge(); }
+  if (telegramPreview && (isOpen() || $('#rewardInbox').open) && telegramGame && !claiming && !buying &&
+    Math.min(S.taskResetAt.daily, S.taskResetAt.weekly) <= now() && now()-lastPassResetCheck >= 15000) {
+    lastPassResetCheck = now();
+    void telegramGame.passStatus().catch(() => {});
+  }
   if (isOpen() && !$('#rewardInbox').open) { renderCountdown(); renderStats(); renderTaskSummary(); }
 }, 1000);
 
@@ -16782,6 +16876,14 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     return {id:issued.id,name:finishes[issued.rarity].name,rarity:issued.rarity,art:preview ? artwork(preview,true) : ''};
   }
   window.COLLECTOR_CARDS = {
+    telegramCardArtwork(row) {
+      const card = issuedCards([], [row])[0];
+      return card ? artwork(card,true) : '';
+    },
+    telegramOwnedArtwork(pid, cardId) {
+      const card = cardId && byId(cardId,pid);
+      return card ? artwork(card) : '';
+    },
     setTelegramCollection(profile) {
       const key = String(profile.player.id);
       issuedByPlayer.set(key, issuedCards(profile.cardGrants || [], profile.cards || []));
