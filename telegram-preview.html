@@ -5334,9 +5334,14 @@ function updateMythicNumbers() {
 }
 .telegram-fullscreen body > .stats-bar { margin-top:var(--game-safe-top) }
 .telegram-fullscreen :is(#usernamesScreen,#collectionScreen,#ratingScreen,#checkScreen,#chancesScreen,
-  #marketScreen,#profileScreen,#otherProfileScreen,#promoScreen,#gamesScreen,#upgradeGameScreen,
+  #marketScreen,#profileScreen,#promoScreen,#gamesScreen,#upgradeGameScreen,
   #arScreen,#exScreen,#bpScreen,#bjScreen,#cardCollectionScreen,#cardShopScreen,#pvpScreen) {
     top:var(--game-safe-top);
+    max-height:calc(100dvh - var(--game-safe-top));
+}
+.telegram-fullscreen #otherProfileScreen {
+    top:var(--game-safe-top) !important;
+    height:auto !important;
     max-height:calc(100dvh - var(--game-safe-top));
 }
 .telegram-fullscreen .menu-sheet { max-height:min(90vh,calc(100dvh - var(--game-safe-top))) }
@@ -15065,30 +15070,6 @@ boot();
 window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.querySelector('#drawer.open'))renderDrawer();}};
 })();
 </reactor-script>
-
-<style id="telegram-mobile-motion">
-@media (pointer:coarse) and (prefers-reduced-motion:no-preference) {
-    .telegram-preview :is(#collectionScreen,#usernamesScreen,#marketScreen,#cardShopScreen,
-      #cardCollectionScreen,#bpScreen,#pvpScreen,#profileScreen,#otherProfileScreen).active {
-        animation:telegram-screen-in 220ms cubic-bezier(.22,.61,.36,1);
-    }
-    .telegram-preview .menu-sheet {
-        transition:transform 260ms cubic-bezier(.22,.61,.36,1);
-    }
-    .telegram-preview :is(.nx-drawer,.xs-drawer,#bpScreen .bp-drawer) {
-        transition-duration:270ms,0ms;
-        transition-delay:0ms,270ms;
-    }
-    .telegram-preview :is(.nx-drawer,.xs-drawer,#bpScreen .bp-drawer).open { transition-delay:0ms }
-    .telegram-preview :is(.nx-btn,.cr-buy,.pv-action,.menu-item,.btn-tile) { transition:transform 140ms ease-out }
-    .telegram-preview :is(.nx-btn,.cr-buy,.pv-action,.menu-item,.btn-tile):active { transform:scale(.98) }
-    .telegram-preview #cardCollectionScreen.active .cc-item:nth-child(n+9) { animation:none }
-}
-@keyframes telegram-screen-in {
-    from { opacity:.55 }
-    to { opacity:1 }
-}
-</style>
 </body>
 </html>
 </script>
@@ -20056,5 +20037,28 @@ button.dev-gift-mark:active { scale:.94; }
   });
 })();
 </script>
+<style id="telegram-mobile-motion">
+@media (pointer:coarse) and (prefers-reduced-motion:no-preference) {
+    .telegram-preview :is(#collectionScreen,#usernamesScreen,#marketScreen,#cardShopScreen,
+      #cardCollectionScreen,#bpScreen,#pvpScreen,#profileScreen,#otherProfileScreen).active {
+        animation:telegram-screen-in 220ms cubic-bezier(.22,.61,.36,1);
+    }
+    .telegram-preview .menu-sheet {
+        transition:transform 260ms cubic-bezier(.22,.61,.36,1);
+    }
+    .telegram-preview :is(.nx-drawer,.xs-drawer,#bpScreen .bp-drawer) {
+        transition-duration:270ms,0ms;
+        transition-delay:0ms,270ms;
+    }
+    .telegram-preview :is(.nx-drawer,.xs-drawer,#bpScreen .bp-drawer).open { transition-delay:0ms }
+    .telegram-preview :is(.nx-btn,.cr-buy,.pv-action,.menu-item,.btn-tile) { transition:transform 140ms ease-out }
+    .telegram-preview :is(.nx-btn,.cr-buy,.pv-action,.menu-item,.btn-tile):active { transform:scale(.98) }
+    .telegram-preview #cardCollectionScreen.active .cc-item:nth-child(n+9) { animation:none }
+}
+@keyframes telegram-screen-in {
+    from { opacity:.55 }
+    to { opacity:1 }
+}
+</style>
 </body>
 </html>
