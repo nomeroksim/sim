@@ -9235,6 +9235,11 @@ function closeUzDetails() {
 async function sellUsername(idx) {
     const uz = myUsernames[idx];
     if (!uz) return;
+    if (telegramPreview) {
+        try { await window.TELEGRAM_USERNAMES?.sellIds([uz.id], false); }
+        catch (error) { showToast('error', error.message || 'Не удалось продать юз', ''); }
+        return;
+    }
 
     const me = allPlayers.find(p => p.isMe);
     if (!me) return;
@@ -9398,6 +9403,12 @@ function setMainUz() {
     if (!uz) return;
 
     const uzName = uz.name;
+    if (telegramPreview) {
+        void window.TELEGRAM_USERNAMES?.togglePin(uzName,false,uz.id).then(updateUzChartButton, error => {
+            showToast('error', error.message || 'Не удалось закрепить юз', '');
+        });
+        return;
+    }
     const myProfile = allPlayers.find(p => p.isMe);
 
     if (pinnedUz.includes(uzName)) {
@@ -9652,6 +9663,7 @@ async function startTelegramPreview() {
         if (['filter','open','open-profile-card','close-collection','close'].includes(target.dataset.cardAction)) return;
         if (['pin','sell'].includes(target.dataset.cardAction) && telegramGame?.canRoll()) return;
         if (userNameActions.has(target.dataset.uz)) return;
+        if (['slot','sell','bulk-sell'].includes(target.dataset.uz) && telegramGame?.canRoll()) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
         if (!target.closest('#menuSheet') && previewSafeActions.has(target.dataset.nx)) return;
         event.preventDefault();
@@ -9700,11 +9712,13 @@ async function startTelegramPreview() {
         refreshRollActions();
         updateRollButtons();
     }
-    function telegramUsernames(rows) {
+    function telegramUsernames(rows, syncPins = true) {
         myUsernames = (rows || []).filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
             id: row.id, name: row.name, price: Number(row.price) || 0, rarity: row.rarity, history: row.history,
-            boughtAt: Date.parse(row.bought_at), isMain: row.is_main
+            boughtAt: Date.parse(row.bought_at), pinOrder: row.pin_order, isMain: row.pin_order != null
         }));
+        if (syncPins) pinnedUz = myUsernames.filter(item => item.pinOrder != null)
+            .sort((a,b) => Number(a.pinOrder)-Number(b.pinOrder)).map(item => item.name);
         if (document.getElementById('usernamesScreen')?.classList?.contains('active')) renderUsernames();
     }
 
@@ -9766,6 +9780,7 @@ async function startTelegramPreview() {
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
         telegramUsernames(state.usernames);
         renderWallet({ id:'tg-preview', ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
+            main_uz:pinnedUz.join(',') || null, second_uz:null,
             rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
         if (state.pass) acceptPass(state.pass);
         else renderTelegramCards();
@@ -9780,8 +9795,8 @@ async function startTelegramPreview() {
         refreshRollActions();
         originalPlayer = profile.player;
         originalProfile = profile;
-        telegramUsernames(profile.usernames);
         pinnedUz = parsePinnedUz(profile.player);
+        telegramUsernames(profile.usernames,false);
         window.COLLECTOR_CARDS?.setTelegramCollection(profile);
         bind.hidden = true;
         code.value = '';
@@ -9861,6 +9876,7 @@ async function startTelegramPreview() {
         try {
             const state = await api({ action, ...fields, requestId });
             pendingItems.delete(key);
+            if (action.startsWith('username-')) ratingProfiles.clear();
             renderState(state);
             return state;
         } catch (error) {
@@ -13806,19 +13822,46 @@ async function viewMarket() {
 async function sellIds(ids, ask) {
   const list = ids.map(id => (myUsernames || []).find(u => String(u.id) === String(id))).filter(Boolean);
   if (!list.length) { X.fail('Нечего продавать'); return; }
+  if (telegramPreview && list.length !== ids.length) { X.fail('Состав коллекции изменился. Выбери юзы снова.'); return; }
   const total = list.reduce((s, u) => s + Math.floor((Number(u.price) || 0) * .5), 0);
   if (ask && !confirm(`Продать ${list.length} ${plural(list.length, 'юз', 'юза', 'юзов')} за ${fmt(total)} ◆?`)) return;
-  for (const u of list) {
-    const idx = myUsernames.indexOf(u); if (idx < 0) continue;
-    if (pinnedUz.includes(u.name)) await togglePin(u.name, true);
-    await sellUsername(idx);
+  if (telegramPreview) {
+    if (!telegramGame?.canRoll()) return;
+    try {
+      const result = await telegramGame.trade('username-sell',{usernameIds:list.map(u => u.id).sort(),expectedCredit:total});
+      X.toast('Продано · +' + fmt(result.credited) + ' ◆');
+    } catch (error) {
+      if (error.status === 409) await telegramGame.trade('state',{}).catch(() => {});
+      throw error;
+    }
+  } else {
+    for (const u of list) {
+      const idx = myUsernames.indexOf(u); if (idx < 0) continue;
+      if (pinnedUz.includes(u.name)) await togglePin(u.name, true);
+      await sellUsername(idx);
+    }
   }
   U.sel = {}; U.selMode = false;
   const c = X.drawerCtx(); if (c && c.owner === 'uz') X.closeDrawer();
   X.sfx.coin(); renderU();
 }
-async function togglePin(name, silent) {
+async function togglePin(name, silent, usernameId) {
   const me = X.me(); if (!me) return;
+  if (telegramPreview) {
+    const handle = myUsernames.find(item => item.id === usernameId);
+    if (!handle || !telegramGame?.canRoll()) return;
+    const pinned = handle.pinOrder == null;
+    const result = await telegramGame.trade('username-pin',{usernameId:handle.id,pinned});
+    if (!silent) {
+      const actual = result.usernames.some(row => row.id === handle.id && row.pin_order != null);
+      X.sfx.tick();
+      X.toast(actual ? `${esc(name)} в профиле · ${pinnedUz.length}/${MAX_PINNED_UZ}` : `${esc(name)} убран из профиля`);
+      const drawer = X.drawerCtx();
+      if (drawer?.owner === 'uz' && drawer.id === String(handle.id)) viewUz(handle.id,true);
+      renderU();
+    }
+    return;
+  }
   if (pinnedUz.includes(name)) pinnedUz = pinnedUz.filter(n => n !== name);
   else { if (pinnedUz.length >= MAX_PINNED_UZ) { X.fail(`Все ${MAX_PINNED_UZ} мест в профиле заняты — сначала убери один юз`); return; } pinnedUz = pinnedUz.concat(name); }
   me.main_uz = pinnedUz.join(',') || null; me.second_uz = null;
@@ -13827,6 +13870,7 @@ async function togglePin(name, silent) {
   try { updateProfileUI(); } catch (e) {}
   if (!silent) { X.sfx.tick(); X.toast(pinnedUz.includes(name) ? `${esc(name)} в профиле · ${pinnedUz.length}/${MAX_PINNED_UZ}` : `${esc(name)} убран из профиля`); renderU(); }
 }
+window.TELEGRAM_USERNAMES = {sellIds,togglePin};
 function toggleFav(id) { const m = meta(); m.fav[id] = !m.fav[id]; if (!m.fav[id]) delete m.fav[id]; saveMeta(m); renderU(); X.sfx.tick(); }
 function move(id, d) {
   const l = listItems().map(i => i.id), i = l.indexOf(id), j = i + d; if (i < 0 || j < 0 || j >= l.length) return;
@@ -13872,7 +13916,7 @@ document.addEventListener('click', e => {
     case 'open': if (U.selMode) { U.sel[id] = !U.sel[id]; renderU(); X.sfx.tick(); } else viewUz(id); break;
     case 'fav': toggleFav(id); break;
     case 'sell': X.lock('uzs' + id, t, () => sellIds([id], false)); break;
-    case 'slot': { const it = items().find(i => i.id === id); if (it) X.lock('uzslot', t, () => togglePin(it.name)); break; }
+    case 'slot': { const it = items().find(i => i.id === id); if (it) X.lock('uzslot', t, () => togglePin(it.name,false,id)); break; }
     case 'move': move(id, Number(t.dataset.d) || 0); viewUz(id, true); break;
     case 'copy': { const it = items().find(i => i.id === id); if (it) X.copy(it.name); break; }
     case 'market':
