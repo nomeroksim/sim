@@ -9683,7 +9683,7 @@ async function startTelegramPreview() {
         if (['pin','sell'].includes(target.dataset.cardAction) && telegramGame?.canRoll()) return;
         if (userNameActions.has(target.dataset.uz)) return;
         if (['slot','sell','bulk-sell'].includes(target.dataset.uz) && telegramGame?.canRoll()) return;
-        if (['set-main','toggle-lock','cx-bulk-lock'].includes(target.dataset.nx) && telegramGame?.canRoll()) return;
+        if (['set-main','toggle-lock','cx-bulk-lock','replace-digit'].includes(target.dataset.nx) && telegramGame?.canRoll()) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
         if (!target.closest('#menuSheet') && previewSafeActions.has(target.dataset.nx)) return;
         event.preventDefault();
@@ -9896,7 +9896,7 @@ async function startTelegramPreview() {
         try {
             const state = await api({ action, ...fields, requestId });
             pendingItems.delete(key);
-            if (action.startsWith('username-') || action === 'number-main') ratingProfiles.clear();
+            if (action.startsWith('username-') || action === 'number-main' || action === 'number-replace') ratingProfiles.clear();
             renderState(state);
             return state;
         } catch (error) {
@@ -11155,7 +11155,7 @@ function openNumber(key) {
     <button class="nx-btn ${n.isMain ? '' : 'nx-primary'} nx-full" data-nx="set-main" data-key="${esc(key)}" ${n.isMain ? 'disabled' : ''}>${ic('crown', 15)}${n.isMain ? 'Уже основной номер' : 'Сделать основным'}</button>
     ${mythic ? '' : `<div class="nx-row">
       <button class="nx-btn ${n.isLocked ? 'cx-ok' : ''}" data-nx="toggle-lock" data-key="${esc(key)}">${ic(n.isLocked ? 'unlock' : 'lock', 15)}${n.isLocked ? 'Снять защиту' : 'Защитить'}</button>
-      <button class="nx-btn nx-gold" data-nx="replace-digit" data-key="${esc(key)}" ${secret ? 'disabled' : ''}>${ic('shuffle', 15)}Цифра · ${money(REPLACE_COST)}</button>
+      <button class="nx-btn nx-gold" data-nx="replace-digit" data-key="${esc(key)}" ${secret || (telegramPreview && n.isLocked) ? 'disabled' : ''}>${ic('shuffle', 15)}Цифра · ${money(REPLACE_COST)}</button>
     </div>`}
     ${NX.sort === 'manual' ? `<div class="nx-row"><button class="nx-btn" data-nx="cx-move" data-key="${esc(key)}" data-d="-1">${ic('up', 15)}Выше</button><button class="nx-btn" data-nx="cx-move" data-key="${esc(key)}" data-d="1">${ic('down', 15)}Ниже</button></div>` : ''}
     ${mythic ? '' : `<button class="nx-btn nx-danger nx-full" data-nx="sell-number" data-key="${esc(key)}" ${n.isLocked ? 'disabled' : ''}>${ic('coins', 15)}Продать за ${money(sellPrice)}</button>`}
@@ -11366,6 +11366,19 @@ async function replaceDigit(key, btn) {
   if (n.id == null) { fail('Номер ещё не сохранён в базе'); return; }
   const parsed = parseSpinNumber(n.formatted);
   if (!parsed) { fail('У этого номера нельзя заменить цифру'); return; }
+  if (telegramPreview) {
+    if (n.isLocked || n.exc) { fail(n.isLocked ? 'Сначала сними защиту номера' : 'У этого номера нельзя заменить цифру'); return; }
+    const state = await changeNumberOptions('number-replace',{
+      numberId:n.id,expectedNumber:n.formatted,expectedPrice:Number(n.price)
+    },btn);
+    if (!state) return;
+    const {rarity,previousRarity} = state.replacement;
+    refreshNumberOptions(key);
+    const up = (RAR[rarity]?.rank || 0) > (RAR[previousRarity]?.rank || 0);
+    if (up) sfx.coin(); else sfx.ok();
+    toast(`Цифра заменена · ${RAR[rarity]?.label}${up ? ' — редкость выросла!' : ''}`);
+    return;
+  }
   const base = parsed.digits;
   busy(btn, true);
   const fmtNum = d => formatSpinNumber(parsed.prefix, parsed.code, d);
