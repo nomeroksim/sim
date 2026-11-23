@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SIM CARD GAME</title>
+  <script>
+    const incoming = new URL(location.href);
+    const published = incoming.hostname === "nomeroksim.github.io";
+    const game = new URL(published ? "./telegram-preview.html" : "./game.html", incoming);
+    game.search = incoming.search;
+    game.hash = incoming.hash;
+    if (published) game.searchParams.set("v", "86255752");
+    else game.searchParams.set("telegram-preview", "1");
+    location.replace(game.href);
+  </script>
+</head>
+<body>
+  <main>
+    <h1>SIM CARD GAME</h1>
+    <p><a href="./telegram-game.html">Открыть игру</a></p>
+  </main>
+</body>
+</html>
