@@ -9635,9 +9635,9 @@ async function startTelegramPreview() {
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
-        'submit-list-number','buy-lot','confirm-buy','cancel-lot']);
+        'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
     const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()']);
-    const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy']);
+    const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
         if (!target) return;
@@ -9692,6 +9692,13 @@ async function startTelegramPreview() {
         refreshRollActions();
         updateRollButtons();
     }
+    function telegramUsernames(rows) {
+        myUsernames = (rows || []).filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
+            id: row.id, name: row.name, price: Number(row.price) || 0, rarity: row.rarity, history: row.history,
+            boughtAt: Date.parse(row.bought_at), isMain: row.is_main
+        }));
+        if (document.getElementById('usernamesScreen')?.classList?.contains('active')) renderUsernames();
+    }
     function renderState(state) {
         walletVersion++;
         walletScope = state.walletScope || 'preview';
@@ -9699,6 +9706,7 @@ async function startTelegramPreview() {
         savedNumbers = state.numbers.filter(row => row.status === 'saved').map(rolledNumber);
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
+        telegramUsernames(state.usernames);
         renderWallet({ ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
             rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
         updateCollection();
@@ -9711,10 +9719,7 @@ async function startTelegramPreview() {
         refreshRollActions();
         originalPlayer = profile.player;
         originalProfile = profile;
-        myUsernames = profile.usernames.filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
-            id: row.id, name: row.name, price: Number(row.price) || 0, history: row.history,
-            boughtAt: Date.parse(row.bought_at), isMain: row.is_main
-        }));
+        telegramUsernames(profile.usernames);
         pinnedUz = parsePinnedUz(profile.player);
         window.COLLECTOR_CARDS?.setTelegramCollection(profile);
         bind.hidden = true;
@@ -11266,18 +11271,14 @@ function renderBalances() {
 }
 function renderMarket() {
   renderBalances();
-  const tabs = telegramPreview ? MARKET_TABS.filter(tab => tab.id !== 'uz') : MARKET_TABS;
-  if (telegramPreview && NX.marketTab === 'uz') NX.marketTab = 'all';
-  const listUzButton = telegramPreview && document.querySelector('[data-nx="list-uz"]');
-  if (listUzButton) listUzButton.style.display = 'none';
-  $('#nxMarketSeg').innerHTML = tabs.map(t => `<button class="${NX.marketTab === t.id ? 'on' : ''}" data-nx="market-tab" data-tab="${t.id}">${ic(t.icon, 15)}${t.label}</button>`).join('');
+  $('#nxMarketSeg').innerHTML = MARKET_TABS.map(t => `<button class="${NX.marketTab === t.id ? 'on' : ''}" data-nx="market-tab" data-tab="${t.id}">${ic(t.icon, 15)}${t.label}</button>`).join('');
   let lots = [...(marketLots || [])];
   if (NX.marketTab === 'numbers') lots = lots.filter(l => l.type === 'number');
   else if (NX.marketTab === 'uz') lots = lots.filter(isNickLot);
   else if (NX.marketTab === 'my') lots = lots.filter(l => l.isMine);
   const grid = $('#nxMarketGrid');
   if (!lots.length) {
-    grid.innerHTML = `<div class="nx-empty">${ic('market', 36)}<b>Здесь пока нет лотов</b><span>${NX.marketTab === 'my' ? (telegramPreview ? 'Выстави номер из коллекции' : 'Выстави свой номер или юз — кнопками выше') : 'Загляни позже или выстави свой актив'}</span></div>`;
+    grid.innerHTML = `<div class="nx-empty">${ic('market', 36)}<b>Здесь пока нет лотов</b><span>${NX.marketTab === 'my' ? 'Выстави свой номер или юз — кнопками выше' : 'Загляни позже или выстави свой актив'}</span></div>`;
     return;
   }
   grid.innerHTML = lots.map(l => {
@@ -11341,7 +11342,7 @@ async function tradeInTelegram(action, fields, btn, message) {
   busy(btn, true);
   try {
     await telegramGame.trade(action, fields);
-    if (action === 'market-list') NX.marketTab = 'my';
+    if (action === 'market-list' || action === 'market-list-username') NX.marketTab = 'my';
     closeDrawer();
     refreshAll();
     sfx.ok();
@@ -11360,7 +11361,7 @@ async function buyLot(id, btn) {
   const isNum = l.type === 'number';
   if (isNum && isTrophyNumber(lotNum(l))) { fail('Этот номер нельзя купить'); return; }
   if (isNum ? balance < l.price : userCrystals < l.price) { fail(isNum ? 'Недостаточно рублей' : 'Недостаточно кристаллов'); return; }
-  if (telegramPreview) return tradeInTelegram('market-buy', {lotId:l.id,price:l.price}, btn, 'Номер добавлен в коллекцию');
+  if (telegramPreview) return tradeInTelegram('market-buy', {lotId:l.id,price:l.price}, btn, isNum ? 'Номер добавлен в коллекцию' : 'Юз добавлен в коллекцию');
   busy(btn, true);
   const done = async ok => { busy(btn, false); await loadMarketLotsFromDB(); renderMarket(); if (ok) closeDrawer(); };
   const c = await claimLot(l.id, 'sold');
@@ -11427,9 +11428,14 @@ async function submitListNumber(btn) {
 }
 async function submitListUz(btn) {
   const m = me(); if (!m || NX.busy) return;
-  const list = myUsernames || [], u = list[+$('#nxListUz').value], price = parseInt($('#nxListUzPrice').value, 10);
+  const list = myUsernames || [], u = list[+$('#nxListUz').value], rawPrice = $('#nxListUzPrice').value;
+  const price = telegramPreview ? Number(rawPrice) : parseInt(rawPrice, 10);
   if (!u) return;
   if (!price || price < 1) { fail('Укажи цену'); return; }
+  if (telegramPreview) {
+    if (!Number.isSafeInteger(price)) { fail('Укажи целую цену'); return; }
+    return tradeInTelegram('market-list-username', {usernameId:u.id,price}, btn, 'Юз выставлен на маркет');
+  }
   busy(btn, true);
   const { error } = await _supabase.from('market_lots').insert([{
     seller_id: m.id, type: 'nick', price, nickname: u.name, color: LOT_COLORS[Math.floor(Math.random() * LOT_COLORS.length)],
@@ -11448,7 +11454,7 @@ async function submitListUz(btn) {
 async function cancelLot(id, btn) {
   const l = (marketLots || []).find(x => String(x.id) === String(id)), m = me();
   if (!l || !m || NX.busy || !l.isMine) return;
-  if (telegramPreview) return tradeInTelegram('market-cancel', {lotId:l.id}, btn, 'Лот снят, номер вернулся в коллекцию');
+  if (telegramPreview) return tradeInTelegram('market-cancel', {lotId:l.id}, btn, 'Лот снят, актив вернулся в коллекцию');
   busy(btn, true);
   let c = await claimLot(l.id, 'cancelled');
   if (c.error) { // если статус «cancelled» база не принимает — удаляем лот
@@ -13588,7 +13594,10 @@ document.addEventListener('click', e => {
     case 'slot': { const it = items().find(i => i.id === id); if (it) X.lock('uzslot', t, () => togglePin(it.name)); break; }
     case 'move': move(id, Number(t.dataset.d) || 0); viewUz(id, true); break;
     case 'copy': { const it = items().find(i => i.id === id); if (it) X.copy(it.name); break; }
-    case 'market': viewMarket(); break;
+    case 'market':
+      if (telegramPreview) { closeUsernames(); window.openMarket(); window.switchMarketTab('uz'); }
+      else viewMarket();
+      break;
     case 'buy': X.closeDrawer(); if (window.NXScreens) NXScreens.confirmBuy(id); break;
   }
 });
