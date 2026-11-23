@@ -9633,10 +9633,14 @@ async function startTelegramPreview() {
     const previewSafeActions = new Set(['close','close-drawer','sound','dismiss-hint','filter','cycle-sort',
         'cx-view','cx-spin','open-number','copy-number','sec-reveal','sell-number','toggle-select',
         'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()']);
+    const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy']);
     document.addEventListener('click', event => {
-        const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, [data-nx]');
+        const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, [data-nx], [data-uz], [data-card-action]');
         if (!target) return;
+        if (target.dataset.cardAction === 'collection' && linked) return;
+        if (['filter','open','close-collection','close'].includes(target.dataset.cardAction)) return;
+        if (userNameActions.has(target.dataset.uz)) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
         if (!target.closest('#menuSheet') && previewSafeActions.has(target.dataset.nx)) return;
         event.preventDefault();
@@ -9696,6 +9700,12 @@ async function startTelegramPreview() {
         readOnly = true;
         refreshRollActions();
         originalPlayer = profile.player;
+        myUsernames = profile.usernames.filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
+            id: row.id, name: row.name, price: Number(row.price) || 0, history: row.history,
+            boughtAt: Date.parse(row.bought_at), isMain: row.is_main
+        }));
+        pinnedUz = parsePinnedUz(profile.player);
+        window.COLLECTOR_CARDS?.setTelegramCollection(profile);
         bind.hidden = true;
         code.value = '';
         if (state?.walletScope === 'original' || profile.canActivate) {
@@ -16338,20 +16348,14 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     if (isNaN(day) || day.toISOString().slice(0, 10) !== release) return null;
     return { ...template, id, price, serial, edition, sim: points, release };
   }
-  async function loadIssuedCards(id) {
-    const { data, error } = await _supabase.from('market_lots').select('id,number_data')
-      .eq('seller_id', id).eq('status', 'active').eq('number_data->>kind', grantKind)
-      .order('id', { ascending: false });
-    if (error) throw error;
+  function issuedCards(grants, purchases) {
     const latest = new Map();
-    (data || []).forEach(row => {
+    grants.forEach(row => {
       const card = normalizeGrant(row);
       if (card && !latest.has(card.id)) latest.set(card.id, card);
     });
     // Купленные карты используют тот же визуал и механику коллекции, что и выданные администратором.
-    const purchased = await _supabase.from('player_ton_cards').select('rarity,serial_number,total_edition,balance_sim,custom_id,created_at').eq('player_id', id);
-    if (purchased.error) console.warn('purchased cards', purchased.error);
-    else (purchased.data || []).forEach(row => {
+    purchases.forEach(row => {
       const base = cards.find(card => card.rarity === row.rarity);
       const serial = Number(row.serial_number), edition = Number(row.total_edition), points = Number(row.balance_sim);
       const release = String(row.created_at || '').slice(0, 10);
@@ -16360,7 +16364,17 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     });
     return [...latest.values()];
   }
+  async function loadIssuedCards(id) {
+    const { data, error } = await _supabase.from('market_lots').select('id,number_data')
+      .eq('seller_id', id).eq('status', 'active').eq('number_data->>kind', grantKind)
+      .order('id', { ascending: false });
+    if (error) throw error;
+    const purchased = await _supabase.from('player_ton_cards').select('rarity,serial_number,total_edition,balance_sim,custom_id,created_at').eq('player_id', id);
+    if (purchased.error) console.warn('purchased cards', purchased.error);
+    return issuedCards(data || [], purchased.data || []);
+  }
   function loadPlayer(id, force = false) {
+    if (telegramPreview) return Promise.resolve();
     const key = String(id);
     if (reading.has(key)) return reading.get(key);
     if (writing.has(key) || (!force && Date.now() - (known.get(key)?.at || 0) < 30000)) return Promise.resolve();
@@ -16421,7 +16435,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const title = finishes[card.rarity].name;
     const info = (icon, label, value) => '<div class="urow"><span class="uic">' + X.ic(icon, 16) +
       '</span><div class="tx"><small>' + label + '</small><b>' + value + '</b></div></div>';
-    const own = key && key === String(me()?.id);
+    const own = !telegramPreview && key && key === String(me()?.id);
     const html = '<div class="cc-drawer uzd">' + X.drawerHead(title) + '<div class="cc-reveal">' + artwork(card, true) + '</div><div class="rows">' +
       info('coins', 'Цена карточки', '<span class="cc-estimate">' + money.format(marketPrice(card)) +
         ' ₽</span> <span class="cc-market-change' + (priceChange(card) < 0 ? ' down' : '') + '">' + changeLabel(priceChange(card)) + '</span>') +
@@ -16592,6 +16606,11 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     return {id:issued.id,name:finishes[issued.rarity].name,rarity:issued.rarity,art:preview ? artwork(preview,true) : ''};
   }
   window.COLLECTOR_CARDS = {
+    setTelegramCollection(profile) {
+      const key = String(profile.player.id);
+      issuedByPlayer.set(key, issuedCards(profile.cardGrants || [], profile.cards || []));
+      remember(key, profile.cardFlags);
+    },
     passRewardArtwork(pid, season, level, track) {
       if (pid == null || !track || !level) return '';
       const card = byId(passCardId(pid,season,level,track),pid);
