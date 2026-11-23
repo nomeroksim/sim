@@ -8491,6 +8491,9 @@ function hasDevGift(player) {
   if (!player || (player.is_game_owner !== true && String(player.telegram_id) !== '827919681' && !hasTag(player, 'owner'))) return false;
   return [player.username, player.name].some(value => String(value ?? '').trim().replace(/^@/, '').toLowerCase() === 'dev');
 }
+function officialBadge() {
+  return '<span class="official-badge" role="img" aria-label="Официальный аккаунт" title="Официальный аккаунт">✓</span>';
+}
 function devGiftBadge(openable = false) {
   return openable
     ? '<button type="button" class="dev-gift-mark" data-dev-gift aria-haspopup="dialog" aria-controls="devGiftDialog" aria-label="Открыть подарок «Маска ужаса»" title="Маска ужаса"></button>'
@@ -8526,7 +8529,7 @@ function updateProfileUI(){
         </div>
         <div class="id-main">
           <div class="name-row">
-            <h1>${escHtml(me.name||'Игрок')}</h1>${me.is_game_owner ? '<span aria-label="Подтверждённый владелец" title="Подтверждённый владелец" style="color:#80d6ff;font-weight:900">✓</span>' : ''}
+            <h1>${escHtml(me.name||'Игрок')}</h1>${me.is_game_owner ? officialBadge() : ''}
             <span data-collector-player="${escHtml(me.id)}"></span>
             ${hasDevGift(me) ? devGiftBadge(true) : ''}
             ${me.is_game_owner ? `<span class="tag game-owner-tag">${pIcon('crown',12)}Владелец</span>` : ''}
@@ -10355,7 +10358,7 @@ async function openOtherProfile(playerId, assets) {
                 <span class="dot" aria-hidden="true"></span>
             </div>
             <div class="id-main">
-                <div class="name-row"><h1>${escHtml(p.name || 'Игрок')}</h1><span data-collector-player="${escHtml(p.id)}"></span>${hasDevGift(p) ? devGiftBadge(true) : ''}</div>
+                <div class="name-row"><h1>${escHtml(p.name || 'Игрок')}</h1>${p.is_game_owner ? officialBadge() : ''}<span data-collector-player="${escHtml(p.id)}"></span>${hasDevGift(p) ? devGiftBadge(true) : ''}</div>
                 ${p.is_game_owner || tagList(p.tag).length ? `<div class="badge-row">${p.is_game_owner ? `<span class="badge-owner" style="--tc:#f0c468">${_pIcon('shield',11)}ВЛАДЕЛЕЦ</span>` : ''}${tagList(p.tag).filter(k => !p.is_game_owner || k !== 'owner').map(k => `<span class="badge-owner" style="--tc:${TAG_COLORS[k] || '#3DDC97'}">${_pIcon('shield', 11)}${escHtml((TAGS[k]?.label || k).toUpperCase())}</span>`).join('')}</div>` : ''}
                 ${p.telegram_username ? `<div class="public-profile-username">@${escHtml(p.telegram_username)}</div>` : ''}
                 <div class="public-profile-info">
@@ -17907,6 +17910,10 @@ $('#bpTaskIc').innerHTML = ic('list', 18);
 .cc-icon:hover,.cc-icon:focus-visible,.cc-badge:hover,.cc-badge:focus-visible{border-color:#78dfff;outline:2px solid #78dfff;outline-offset:2px}
 [data-collector-player]:empty{display:none}
 .cc-badge{width:34px;height:34px;background:#102c45;color:#8ae5ff;border-radius:50%;font-size:15px;vertical-align:middle}
+.cc-badge:disabled{opacity:.5;cursor:default}
+.official-badge{display:inline-grid;place-items:center;width:21px;height:21px;flex:none;color:white;background:#329cf0;clip-path:polygon(50% 0,61% 8%,75% 5%,82% 18%,95% 25%,92% 39%,100% 50%,92% 61%,95% 75%,82% 82%,75% 95%,61% 92%,50% 100%,39% 92%,25% 95%,18% 82%,5% 75%,8% 61%,0 50%,8% 39%,5% 25%,18% 18%,25% 5%,39% 8%);font:900 14px system-ui;animation:official-glow 2.8s ease-in-out infinite}
+@keyframes official-glow{50%{background:#79d3ff;transform:scale(1.1)}}
+@media(prefers-reduced-motion:reduce){.official-badge{animation:none}}
 .cc-content{max-width:1152px;margin:auto;padding:clamp(25px,5vw,52px) clamp(16px,4vw,34px) calc(40px + env(safe-area-inset-bottom))}
 .cc-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 clamp(20px,4vw,31px)}
 .cc-heading h1{font:800 clamp(25px,5vw,46px)/1.13 var(--cc-display);letter-spacing:-.055em;overflow-wrap:anywhere}
@@ -18342,7 +18349,23 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   }
   function showBadge(slot, cardId) {
     const card = byId(cardId, slot.dataset.collectorPlayer);
-    if (!card) { slot.replaceChildren(); return; }
+    if (!card) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cc-badge';
+      button.textContent = '✓';
+      if (String(slot.dataset.collectorPlayer) === String(me()?.id)) {
+        button.dataset.cardAction = 'collection';
+        button.setAttribute('aria-label','Выбрать карточку для профиля');
+        button.title = 'Выбрать карточку для профиля';
+      } else {
+        button.disabled = true;
+        button.title = 'Карточка профиля не выбрана';
+        button.setAttribute('aria-label','Карточка профиля не выбрана');
+      }
+      slot.replaceChildren(button);
+      return;
+    }
     if (slot.firstElementChild?.dataset.cardId === card.id) return;
     const button = document.createElement('button');
     button.type = 'button';
