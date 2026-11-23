@@ -5960,7 +5960,7 @@ function updateMythicNumbers() {
           <ul class="rt-mythics-list" id="rtMythics"></ul>
         </section>
         <div class="rt-toolbar">
-          <label class="rt-field"><span id="rtSearchIc"></span><input id="rtSearch" type="text" placeholder="Найти игрока по нику" autocomplete="off"></label>
+          <label class="rt-field"><span id="rtSearchIc"></span><input id="rtSearch" type="text" placeholder="Ник или ID игрока" autocomplete="off"></label>
           <button class="rt-sortbtn" data-rt="sort" id="rtSort"></button>
         </div>
         <div class="rt-chips" id="rtChips" role="group" aria-label="Фильтры рейтинга"></div>
@@ -13908,11 +13908,18 @@ function render() {
     chip.setAttribute('aria-pressed', String(selected));
     chip.lastElementChild.textContent = loadedOnce ? counts[chip.dataset.f] : '—';
   }
-  if (telegramPreview && RT.query.trim().replace(/^@/, '').toLowerCase() === 'dev') {
+  const query = RT.query.trim();
+  const ownerQuery = telegramPreview && /^@?dev$/i.test(query);
+  const publicId = telegramPreview && query.match(/^(?:id\s*#?\s*|#\s*)?0*([1-9]\d*)$/i)?.[1];
+  if (ownerQuery || (publicId && loadedOnce)) {
+    const player = ownerQuery ? null : DATA.find(p => p.public_id === publicId);
+    const profileKey = ownerQuery ? 'dev' : player?.id;
     ownRatingRow = null;
     $('#rtPodium').style.display = 'none';
     paintRating('#rtMy',''); paintRating('#rtPodium',''); paintRating('#rtFilterInfo','Результат поиска');
-    paintRating('#rtList', `<button type="button" class="row" data-rt="owner-profile"><span class="rk">${ic('crown',20)}</span><span class="rinfo"><span class="rname">dev ${officialBadge()}</span><span class="rsub">Владелец игры</span></span><span class="rval">${ic('eye',16)}</span></button>`);
+    paintRating('#rtList', profileKey
+      ? `<button type="button" class="row" data-rt="search-profile" data-profile-key="${esc(profileKey)}">${ownerQuery ? `<span class="rk">${ic('crown',20)}</span>` : ava(player,38)}<span class="rinfo"><span class="rname">${ownerQuery ? 'dev ' + officialBadge() : esc(player.name)}</span><span class="rsub">${ownerQuery ? 'Владелец игры' : 'ID ' + esc(publicId)}</span></span><span class="rval">${ic('eye',16)}</span></button>`
+      : `<div class="rt-empty">${ic('users',36)}<b>Игрок с ID ${esc(publicId)} не найден</b></div>`);
     updateJump();
     return;
   }
@@ -14120,11 +14127,11 @@ document.addEventListener('click', async e => {
   else if (a === 'tab') { RT.tab = t.dataset.tab; savePrefs(); render(); X.sfx.tick(); }
   else if (a === 'sort') { RT.sort = SORTS[(SORTS.indexOf(RT.sort) + 1) % SORTS.length]; savePrefs(); render(); X.sfx.tick(); X.toast('Сортировка: ' + ratingSortLabel()); }
   else if (a === 'player') openPlayer(t.dataset.id);
-  else if (a === 'owner-profile') {
+  else if (a === 'search-profile') {
     if (!telegramGame || t.disabled) return;
     t.disabled = true;
     try {
-      const assets = await telegramGame.ratingProfile('dev');
+      const assets = await telegramGame.ratingProfile(t.dataset.profileKey);
       if (rtOpen() && t.isConnected) await openOtherProfile(assets.player.id,assets);
     } catch (error) { X.fail(esc(error.message || 'Профиль недоступен')); }
     finally { t.disabled = false; }
