@@ -8488,7 +8488,7 @@ function pIcon(name, size=18){
 
 function pFormat(n){ return Number(n||0).toLocaleString('ru-RU'); }
 function hasDevGift(player) {
-  if (!player || (String(player.telegram_id) !== '827919681' && !hasTag(player, 'owner'))) return false;
+  if (!player || (player.is_game_owner !== true && String(player.telegram_id) !== '827919681' && !hasTag(player, 'owner'))) return false;
   return [player.username, player.name].some(value => String(value ?? '').trim().replace(/^@/, '').toLowerCase() === 'dev');
 }
 function devGiftBadge(openable = false) {
@@ -8526,7 +8526,7 @@ function updateProfileUI(){
         </div>
         <div class="id-main">
           <div class="name-row">
-            <h1>${escHtml(me.name||'Игрок')}</h1>
+            <h1>${escHtml(me.name||'Игрок')}</h1>${me.is_game_owner ? '<span aria-label="Подтверждённый владелец" title="Подтверждённый владелец" style="color:#80d6ff;font-weight:900">✓</span>' : ''}
             <span data-collector-player="${escHtml(me.id)}"></span>
             ${hasDevGift(me) ? devGiftBadge(true) : ''}
             ${me.is_game_owner ? `<span class="tag game-owner-tag">${pIcon('crown',12)}Владелец</span>` : ''}
