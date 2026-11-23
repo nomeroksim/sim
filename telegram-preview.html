@@ -18014,9 +18014,11 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     purchases.forEach(row => {
       const base = cards.find(card => card.rarity === row.rarity);
       const serial = Number(row.serial_number), edition = Number(row.total_edition), points = Number(row.balance_sim);
-      const release = String(row.created_at || '').slice(0, 10);
+      const release = String(row.release || row.created_at || '').slice(0, 10);
+      const price = Number(row.base_price ?? base?.price);
       if (!base || !/^[A-Z0-9][A-Z0-9_-]{1,39}$/.test(row.custom_id || '') || !Number.isSafeInteger(serial) || serial < 1 || !Number.isSafeInteger(edition) || serial > edition || !Number.isFinite(points) || points < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(release)) return;
-      latest.set(row.custom_id, { ...base, id: row.custom_id, serial, edition, sim: points, release });
+      if (!Number.isSafeInteger(price) || price < 1) return;
+      latest.set(row.custom_id, { ...base, id: row.custom_id, serial, edition, sim: points, release, price });
     });
     return [...latest.values()];
   }
