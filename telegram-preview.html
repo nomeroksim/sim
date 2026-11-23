@@ -10181,10 +10181,13 @@ async function startTelegramPreview() {
         const key = scope + ':' + id;
         let cached = ratingProfiles.get(key);
         if (!cached || Date.now() - cached.at > 30000) {
-            const pending = Promise.all([
+            const pending = (id === 'dev' ? api({action:'rating-profile',profileId:id}).then(async profile => [
+                profile,
+                await api({action:'card-profile',profileId:profile.player.id}).catch(() => null)
+            ]) : Promise.all([
                 api({action:'rating-profile',profileId:id}),
                 api({action:'card-profile',profileId:id}).catch(() => null)
-            ]).then(([profile,featured]) => ({...profile,profileCard:featured?.card || null}));
+            ])).then(([profile,featured]) => ({...profile,profileCard:featured?.card || null}));
             cached = {at:Date.now(),pending};
             ratingProfiles.set(key,cached);
             try { await pending; }
@@ -13901,6 +13904,14 @@ function render() {
     chip.setAttribute('aria-pressed', String(selected));
     chip.lastElementChild.textContent = loadedOnce ? counts[chip.dataset.f] : '—';
   }
+  if (telegramPreview && RT.query.trim().replace(/^@/, '').toLowerCase() === 'dev') {
+    ownRatingRow = null;
+    $('#rtPodium').style.display = 'none';
+    paintRating('#rtMy',''); paintRating('#rtPodium',''); paintRating('#rtFilterInfo','Результат поиска');
+    paintRating('#rtList', `<button type="button" class="row" data-rt="owner-profile"><span class="rk">${ic('crown',20)}</span><span class="rinfo"><span class="rname">dev ${officialBadge()}</span><span class="rsub">Владелец игры</span></span><span class="rval">${ic('eye',16)}</span></button>`);
+    updateJump();
+    return;
+  }
   if (!loadedOnce) {
     paintRating('#rtMy',''); paintRating('#rtPodium',''); paintRating('#rtFilterInfo','');
     paintRating('#rtList', `<div class="rt-empty">${ic('users', 34)}<b>${ratingError ? 'Рейтинг недоступен' : 'Загружаем рейтинг…'}</b>${ratingError ? '<button class="rt-sortbtn" data-rt="refresh">Повторить</button>' : ''}</div>`);
@@ -14105,6 +14116,15 @@ document.addEventListener('click', async e => {
   else if (a === 'tab') { RT.tab = t.dataset.tab; savePrefs(); render(); X.sfx.tick(); }
   else if (a === 'sort') { RT.sort = SORTS[(SORTS.indexOf(RT.sort) + 1) % SORTS.length]; savePrefs(); render(); X.sfx.tick(); X.toast('Сортировка: ' + ratingSortLabel()); }
   else if (a === 'player') openPlayer(t.dataset.id);
+  else if (a === 'owner-profile') {
+    if (!telegramGame || t.disabled) return;
+    t.disabled = true;
+    try {
+      const assets = await telegramGame.ratingProfile('dev');
+      if (rtOpen() && t.isConnected) await openOtherProfile(assets.player.id,assets);
+    } catch (error) { X.fail(esc(error.message || 'Профиль недоступен')); }
+    finally { t.disabled = false; }
+  }
   else if (a === 'jump') jumpToMe();
   else if (a === 'copy-id') X.copy(String(t.dataset.id));
   else if (a === 'uz') { openPlayerUz(t.dataset.id, t.dataset.name); X.sfx.tick(); }
