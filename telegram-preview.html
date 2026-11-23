@@ -9667,7 +9667,7 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()', 'openExclusive()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -9897,7 +9897,7 @@ async function startTelegramPreview() {
         try {
             const state = await api({ action, ...fields, requestId });
             pendingItems.delete(key);
-            if (action.startsWith('username-') || action === 'number-main' || action === 'number-replace') ratingProfiles.clear();
+            if (action.startsWith('username-') || action === 'number-main' || action === 'number-replace' || action === 'exclusive-reflash') ratingProfiles.clear();
             renderState(state);
             return state;
         } catch (error) {
@@ -12347,7 +12347,7 @@ function openCard(id, keep) {
     </div>
     <div class="vrow"><span class="vl">Новый тариф</span><span class="vv"><span class="vtag" style="--c:${rst.color}">${rst.label} ×${rst.mult}</span></span></div>
     <div class="vrow total"><span class="vl">Новая оценка</span><span class="vv" style="color:${rv.total > s.price ? 'var(--ok)' : 'var(--danger)'}">${money(rv.total)}</span></div>
-    <button class="btn holo full" style="margin-top:10px" data-ex="reflash" data-id="${s.id}" ${rf.length !== 12 || rf === s.serial ? 'disabled' : ''}>${ic('zap', 15)}Перепрошить за ${money(REFLASH_COST)}</button>
+    <button class="btn holo full" style="margin-top:10px" data-ex="reflash" data-id="${s.id}" ${rf.length !== 12 || rf === s.serial || (telegramPreview && s.locked) ? 'disabled' : ''}>${ic('zap', 15)}Перепрошить за ${money(REFLASH_COST)}</button>
   </div>
   <div class="drawer-actions">
     <div class="row"><button class="btn" data-ex="copy" data-id="${s.id}">${ic('copy', 15)}Скопировать</button><button class="btn ${s.fav ? 'gold' : ''}" data-ex="fav" data-id="${s.id}">${ic('heart', 15)}${s.fav ? 'В избранном' : 'В избранное'}</button></div>
@@ -12358,8 +12358,20 @@ function openCard(id, keep) {
 async function sellCards(ids, btn) {
   const items = ids.map(findNum).filter(n => n && n.exc && !n.isLocked);
   if (!items.length) { X.fail('Нечего продавать: карты защищены или не найдены'); return; }
+  if (telegramPreview) {
+    if (!telegramGame?.canRoll()) { X.fail('Открой игру через Telegram'); return; }
+    if (items.length !== ids.length) { X.fail('Один из номеров защищён или недоступен'); return; }
+    if (items.length > 10) { X.fail('Можно продать до 10 номеров за раз'); return; }
+  }
   const total = items.reduce((s, n) => s + Math.floor((Number(n.price) || 0) * SELL_RATE), 0);
   if (!confirm(`Продать ${items.length} ${plural(items.length, 'карту', 'карты', 'карт')} за ${money(total)}?`)) return;
+  if (telegramPreview) {
+    await telegramGame.sell(items);
+    EXP.sel.clear(); EXP.selMode = false;
+    if (X.drawerCtx()?.owner === 'ex') X.closeDrawer();
+    renderPlayer(); X.sfx.coin();
+    return;
+  }
   const { error } = await _supabase.from('player_numbers').delete().in('id', items.map(n => n.id));
   if (error) throw error;
   const set = new Set(items);
@@ -12376,6 +12388,16 @@ async function reflash(id) {
   if (d.length !== 12) { X.fail('Нужно 12 цифр'); return; }
   if (d === cfg.serial) { X.fail('Серийник не изменился'); return; }
   if (balance < REFLASH_COST) { X.fail(`Перепрошивка стоит ${money(REFLASH_COST)}`); return; }
+  if (telegramPreview) {
+    if (!telegramGame?.canRoll() || n.isLocked) { X.fail(n.isLocked ? 'Сначала сними защиту номера' : 'Открой игру через Telegram'); return; }
+    const {reflash:changed} = await telegramGame.trade('exclusive-reflash',{numberId:n.id,serial:d,expectedSerial:cfg.serial});
+    delete EXP.reflash[id];
+    const st = serialTier(changed.serial);
+    if (X.drawerCtx()?.owner === 'ex' && X.drawerCtx()?.id === id) openCard(id,true);
+    st.key === 'solid' ? X.sfx.jack() : X.sfx.ok();
+    X.toast(`Серийник перепрошит · ${st.label} ×${st.mult} · ${money(changed.price)}`, st.key === 'solid' ? 'jack' : 'ok');
+    return;
+  }
   const nc = Object.assign({}, cfg, { serial: d }), price = valuation(nc).total, u = pack(nc), formatted = formattedOf(nc);
   const { error } = await _supabase.from('player_numbers').update({ unique_id: u, price, formatted }).eq('id', n.id);
   if (error) throw error;
