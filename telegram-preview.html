@@ -4470,6 +4470,9 @@ body.bp-eq-holo .sim-card:not(.start-card) .sim-logo:not(.x)::after{content:'SG'
 #ratingScreen .delta.down{color:var(--danger);background:rgba(255,116,102,.12)}
 #ratingScreen .delta.same{color:var(--faint);background:rgba(255,255,255,.05)}
 #ratingScreen .rname{display:block;font-size:13.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ratingScreen .rt-rank-tags{display:flex;flex-wrap:wrap;gap:3px;margin:3px 0;max-width:100%}
+#ratingScreen .pod .rt-rank-tags{justify-content:center}
+#ratingScreen .rt-rank-tags span{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 5px;border-radius:6px;font-size:9px;font-weight:750;line-height:1.3;color:var(--tc);background:color-mix(in srgb,var(--tc) 13%,transparent)}
 #ratingScreen .rsub{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #ratingScreen[data-asset-filter="uz"]{--rt-asset-color:#c5a4ff}
 #ratingScreen[data-asset-filter="secret"]{--rt-asset-color:#7fe0d6}
@@ -9667,7 +9670,7 @@ async function startTelegramPreview() {
         'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
         'reload-card-shop','shop-card-details','shop-filter','buy-card','market-tab','list-number',
         'submit-list-number','list-uz','submit-list-uz','buy-lot','confirm-buy','cancel-lot']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()', 'openExclusive()']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()', 'openMarket()', 'openAuction()', 'openBattlePass()', 'openRating()', 'openPromo()', 'openCheckNumber()', 'openExclusive()', 'openTagCollection()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy','market']);
     document.addEventListener('click', event => {
         const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
@@ -9702,6 +9705,9 @@ async function startTelegramPreview() {
     let pendingRoll = null;
     const pendingItems = new Map();
     const ratingProfiles = new Map();
+    let playerTags = null;
+    let tagVersion = 0;
+    let changingTag = false;
     async function api(body) {
         const response = await fetch(endpoint, {
             method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, cache: 'no-store',
@@ -9721,6 +9727,7 @@ async function startTelegramPreview() {
             op_name: String(row.op_name || operator?.name || 'SECRET').replace(/[<>"']/g, '') });
     }
     function renderWallet(player) {
+        if (!readOnly) player = { ...player, tag:playerTags?.shown.join(',') || null, ownedTags:playerTags?.owned || [] };
         allPlayers = [{ ...player, isMe: true }];
         currentUser.name = player.name || 'Игрок';
         balance = Number(player.balance) || 0;
@@ -9732,6 +9739,44 @@ async function startTelegramPreview() {
         document.getElementById('roamButton').disabled = readOnly;
         refreshRollActions();
         updateRollButtons();
+    }
+    function applyTags(data) {
+        const previous = playerTags?.shown.join(',');
+        playerTags = data;
+        const player = allPlayers.find(item => item.isMe);
+        if (!player) return;
+        player.tag = data.shown.join(',') || null;
+        player.ownedTags = data.owned;
+        if (previous !== data.shown.join(',')) {
+            ratingProfiles.clear();
+            window.TELEGRAM_RATING?.updateTags(player.tag);
+            updateProfileUI();
+        }
+    }
+    async function refreshTags() {
+        if (readOnly || changingTag) return;
+        const scope = walletScope;
+        const version = ++tagVersion;
+        const data = await api({action:'tags'});
+        if (!readOnly && scope === walletScope && version === tagVersion) applyTags(data);
+    }
+    async function changeTag(tagKey, shown) {
+        if (readOnly) throw new Error('Изменение тегов доступно после переноса профиля.');
+        if (changingTag) throw new Error('Дождись сохранения предыдущего тега.');
+        const scope = walletScope;
+        const key = 'tag-visibility:' + scope + ':' + tagKey + ':' + shown;
+        const requestId = pendingItems.get(key) || crypto.randomUUID();
+        pendingItems.set(key, requestId);
+        changingTag = true;
+        tagVersion++;
+        try {
+            const data = await api({action:'tag-visibility',tagKey,shown,requestId});
+            pendingItems.delete(key);
+            if (!readOnly && scope === walletScope) applyTags(data);
+        } catch (error) {
+            if (error.status >= 400 && error.status < 500) pendingItems.delete(key);
+            throw error;
+        } finally { changingTag = false; }
     }
     function telegramUsernames(rows, syncPins = true) {
         myUsernames = (rows || []).filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
@@ -9774,8 +9819,6 @@ async function startTelegramPreview() {
         updateLuckUI();
         if (getActiveBoost()) startLuckTimer();
         passCards = pass.cards || [];
-        const player = allPlayers.find(item => item.isMe);
-        if (player && pass.equipped.tag) player.tag = [...new Set([...tagList(player.tag),'legend'])].join(',');
         renderTelegramCards();
         window.TELEGRAM_PASS?.accept(pass);
     }
@@ -9783,6 +9826,8 @@ async function startTelegramPreview() {
         walletVersion++;
         const scope = state.walletScope || 'preview';
         if (scope !== walletScope) {
+            playerTags = null;
+            tagVersion++;
             ratingProfiles.clear();
             window.TELEGRAM_RATING?.clear();
             window.PROFILE_LIKES?.clear();
@@ -9826,6 +9871,7 @@ async function startTelegramPreview() {
             readOnly = false;
             renderState(imported);
             void refreshCardVault().catch(() => {});
+            void refreshTags().catch(() => {});
             notice.textContent = 'Прежний профиль подключён. Крутки и коллекция используют перенесённый баланс.';
             return;
         }
@@ -9899,6 +9945,9 @@ async function startTelegramPreview() {
             pendingItems.delete(key);
             if (action.startsWith('username-') || action === 'number-main' || action === 'number-replace' || action === 'exclusive-reflash') ratingProfiles.clear();
             renderState(state);
+            if (action === 'pass-use' && state.pass?.equipped?.tag && !playerTags?.owned.includes('legend')) {
+                void refreshTags().catch(() => {});
+            }
             return state;
         } catch (error) {
             if (error.status >= 400 && error.status < 500) pendingItems.delete(key);
@@ -10035,7 +10084,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, duel: api,
+        telegramGame = { roll, store, buyStore, market, auction, trade, passStatus, rating, ratingProfile, refreshCardVault, refreshTags, changeTag, duel: api,
             checkAsset: (kind,value) => api({action:'asset-check',kind,value}),
             support: (message, requestId) => api(message ? { action:'support-send', message, requestId } : { action:'support-inbox' }),
             likes: (profileId, liked) => api({action:liked === undefined ? 'profile-likes' : 'profile-like-set',
@@ -10052,6 +10101,7 @@ async function startTelegramPreview() {
         else {
             renderState(state);
             void refreshCardVault().catch(() => {});
+            void refreshTags().catch(() => {});
             bind.hidden = false;
             notice.textContent = 'Предпросмотр Telegram. Крутка использует отдельный баланс мини-версии.';
         }
@@ -13216,6 +13266,7 @@ const X = window.XS, { esc, ic } = X;
 const myRows = () => { const m = X.me(); return m ? (window.AR_RAW || []).filter(r => r.status === 'active' && r.number_data && r.number_data.kind === 'tag' && String(r.seller_id) === String(m.id)) : []; };
 function owned() {
   const m = X.me(); const s = new Set(tagList(m && m.tag));
+  if (telegramPreview) return (m?.ownedTags || [...s]).filter(k => Object.hasOwn(TAGS,k));
   myRows().forEach(r => s.add(r.number_data.tag));
   return [...s].filter(k => TAGS[k]);
 }
@@ -13270,7 +13321,7 @@ function render() {
   const cards = keys.map(k => {
     const has = own.includes(k), on = shown.includes(k), c = TAG_COLORS[k] || '#E7BC55';
     const note = on ? (k === 'owner' ? 'Показан · скрыть нельзя' : 'Показан рядом с ником') : has ? 'Есть · нажми, чтобы показать' : 'Не получен';
-    return `<button class="tagcard ${on ? 'on' : ''} ${has ? '' : 'locked'}" style="--tc:${c}" data-tg="toggle" data-k="${esc(k)}" ${has ? '' : 'disabled'}>
+    return `<button class="tagcard ${on ? 'on' : ''} ${has ? '' : 'locked'}" style="--tc:${c}" data-tg="toggle" data-k="${esc(k)}" aria-pressed="${on}" ${has && (!telegramPreview || telegramGame?.canRoll()) ? '' : 'disabled'}>
       ${renderTag(k)}<small>${ic(on ? 'check' : has ? 'plus' : 'shield', 12)}${note}</small>${has ? '' : `<span class="how">${esc(TAG_HOW[k] || 'Выдаёт администрация')}</span>`}</button>`;
   }).join('');
   const slots = Array.from({ length: MAX_SHOWN_TAGS }, (_, i) => `<i class="${i < shown.length ? 'on' : ''}"></i>`).join('');
@@ -13281,6 +13332,16 @@ function render() {
 async function toggle(k) {
   const m = X.me(); if (!m || !owned().includes(k)) return;
   const shown = tagList(m.tag);
+  if (telegramPreview) {
+    const next = !shown.includes(k);
+    if (next && shown.length >= MAX_SHOWN_TAGS) { X.fail('Можно показать до трёх тегов. Сначала скрой один.'); return; }
+    try {
+      await telegramGame.changeTag(k,next);
+      X.toast(next ? 'Тег показан' : 'Тег скрыт');
+      if (isOpen()) render();
+    } catch (error) { X.fail(esc(error.message)); }
+    return;
+  }
   if (shown.includes(k)) {
     if (k === 'owner') { X.fail('Тег «Владелец» скрыть нельзя — он открывает админку'); return; }
     await ownRow(m.id, k); // старый тег без записи сохраняем в коллекции, чтобы он не пропал
@@ -13297,6 +13358,11 @@ async function toggle(k) {
 window.openTagCollection = async function () {
   if (typeof closeMenu === 'function') closeMenu();
   render();
+  if (telegramPreview) {
+    try { await telegramGame?.refreshTags(); if (isOpen()) render(); }
+    catch (error) { if (isOpen()) X.fail(esc(error.message)); }
+    return;
+  }
   if (typeof loadMarketLotsFromDB === 'function') { await loadMarketLotsFromDB(); if (isOpen()) render(); }
 };
 document.addEventListener('click', e => {
@@ -13368,7 +13434,12 @@ const savePrefs = () => LS.set('rt_prefs', { tab: RT.tab, sort: RT.sort, filter:
 let DATA = [], BASE = null, loading = null, loadedOnce = false;
 let ratingNumbersComplete = false, ratingUsernamesComplete = false;
 let ratingError = false, ratingGeneration = 0;
-window.TELEGRAM_RATING = { clear() {
+window.TELEGRAM_RATING = { updateTags(tag) {
+  const player = DATA.find(item => item.me);
+  if (!player) return;
+  player.tag = tag;
+  if (rtOpen()) render();
+}, clear() {
   ratingGeneration++;
   DATA = []; BASE = null; loadedOnce = false; mythicOwners = null; ratingError = false;
   ratingMarkup.clear();
@@ -13631,16 +13702,20 @@ function render() {
     const label = p === leader ? `<span class="top1-nickname">👑 ${name}</span>` : name;
     return p.devGift ? `<span class="dev-gift-rank"><span class="dev-gift-rank-label">${label}</span>${devGiftBadge()}</span>` : label;
   };
+  const rankTags = p => {
+    const tags = tagList(p.tag).filter(k => Object.hasOwn(TAGS,k));
+    return tags.length ? `<span class="rt-rank-tags">${tags.map(k => `<span style="--tc:${TAG_COLORS[k]}">${esc(TAGS[k].label)}</span>`).join('')}</span>` : '';
+  };
   if (noPod) { pod.style.display = 'none'; paintRating('#rtPodium', ''); }
   else {
     pod.style.display = 'grid';
     const order = [list[1], list[0], list[2]], cls = ['p2', 'p1', 'p3'], rings = ['#CBD4CE', '#E7BC55', '#D08F52'];
     paintRating('#rtPodium', order.map((p, i) => { const place = i === 1 ? 1 : i === 0 ? 2 : 3;
-      return `<button class="pod ${cls[i]}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}">${p === leader ? `<span class="crown">${ic('crown', 22)}</span>` : ''}<span class="podplace">${place}</span>${ava(p, 44, rings[i])}<span class="podname">${rankName(p)}</span><span class="podval">${ratingAmount(p)}</span><span class="podsub">${category ? subline(p) : RT.tab === 'best' ? (best(p) ? numRar(best(p)).label : '—') : ratingNumbers(p) + ' ' + plural(ratingNumbers(p), 'номер', 'номера', 'номеров')}</span></button>`; }).join(''));
+      return `<button class="pod ${cls[i]}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}">${p === leader ? `<span class="crown">${ic('crown', 22)}</span>` : ''}<span class="podplace">${place}</span>${ava(p, 44, rings[i])}<span class="podname">${rankName(p)}</span>${rankTags(p)}<span class="podval">${ratingAmount(p)}</span><span class="podsub">${category ? subline(p) : RT.tab === 'best' ? (best(p) ? numRar(best(p)).label : '—') : ratingNumbers(p) + ' ' + plural(ratingNumbers(p), 'номер', 'номера', 'номеров')}</span></button>`; }).join(''));
   }
   const offset = noPod ? 0 : 3;
   paintRating('#rtList', list.length ? list.slice(offset).map((p, i) => { const rank = offset + i + 1;
-    return `<button class="row${p.me ? ' me' : ''}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}" data-row="${p.id}" style="animation-delay:${Math.min(i * 22, 260)}ms"><span class="rk">${rank}</span>${category ? '' : deltaHTML(p, rank)}${ava(p, 38)}<span class="rinfo"><span class="rname">${rankName(p)}</span><span class="rsub">${subline(p)}</span></span><span class="rval"><b>${ratingAmount(p)}</b>${category ? `<span class="g-flat">${category.estimate}</span>` : growthHTML(p)}</span></button>`; }).join('') : `<div class="rt-empty">${ic('users', 36)}<b>Игроки не найдены</b><span>Попробуй другой ник или сбрось фильтр</span></div>`);
+    return `<button class="row${p.me ? ' me' : ''}${p === leader ? ' top1-row' : ''}" data-rt="player" data-id="${p.id}" data-row="${p.id}" style="animation-delay:${Math.min(i * 22, 260)}ms"><span class="rk">${rank}</span>${category ? '' : deltaHTML(p, rank)}${ava(p, 38)}<span class="rinfo"><span class="rname">${rankName(p)}</span>${rankTags(p)}<span class="rsub">${subline(p)}</span></span><span class="rval"><b>${ratingAmount(p)}</b>${category ? `<span class="g-flat">${category.estimate}</span>` : growthHTML(p)}</span></button>`; }).join('') : `<div class="rt-empty">${ic('users', 36)}<b>Игроки не найдены</b><span>Попробуй другой ник или сбрось фильтр</span></div>`);
   ownRatingRow = me ? $(`#rtList [data-row="${me.id}"], #rtPodium [data-id="${me.id}"]`) : null;
   updateJump();
 }
