@@ -9632,13 +9632,18 @@ async function startTelegramPreview() {
 
     const previewSafeActions = new Set(['close','close-drawer','sound','dismiss-hint','filter','cycle-sort',
         'cx-view','cx-spin','open-number','copy-number','sec-reveal','sell-number','toggle-select',
-        'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell']);
-    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()']);
+        'clear-select','cx-sel-all','bulk-sell','confirm-bulk-sell','open-card-shop','close-card-shop',
+        'shop-section','reload-crystal-packs','open-crystal-pack','confirm-crystal-pack','retry-crystal-pack',
+        'reload-card-shop','shop-card-details','shop-filter','buy-card']);
+    const previewMenu = new Set(['openProfile()', 'openCollection()', 'openChances()', 'openUsernames()', 'openGames()']);
     const userNameActions = new Set(['close','filter','sort','sel-mode','sel','sel-all','sel-clear','bulk-fav','open','fav','move','copy']);
     document.addEventListener('click', event => {
-        const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, [data-nx], [data-uz], [data-card-action]');
+        const target = event.target.closest('#menuSheet .menu-item, #menuSheet .btn-tile, #gamesScreen .play-btn, [data-nx], [data-uz], [data-card-action]');
         if (!target) return;
+        if (target.dataset.pvp === 'open' && telegramGame?.canRoll()) return;
+        if (target.id === 'openGameRules') return;
         if (target.dataset.cardAction === 'collection' && linked) return;
+        if (target.dataset.nx === 'open-card-shop' && telegramGame) return;
         if (['filter','open','close-collection','close'].includes(target.dataset.cardAction)) return;
         if (userNameActions.has(target.dataset.uz)) return;
         if (target.closest('#menuSheet') && previewMenu.has(target.getAttribute('onclick'))) return;
@@ -9650,7 +9655,8 @@ async function startTelegramPreview() {
     refreshRollActions();
 
     const endpoint = `${supabaseUrl}/functions/v1/telegram-game`;
-    let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer;
+    let session = '', linked = false, readOnly = false, walletScope = 'preview', originalPlayer, originalProfile;
+    let buying = false;
     let pendingRoll = null;
     const pendingItems = new Map();
     async function api(body) {
@@ -9691,7 +9697,7 @@ async function startTelegramPreview() {
         recentNumbers = state.numbers.filter(row => row.status === 'rolled').map(rolledNumber);
         currentRolledNumber = recentNumbers.find(number => number.id === selected) || recentNumbers[0] || null;
         renderWallet({ ...originalPlayer, name: state.player.name, balance: state.player.balance, user_crystals: state.player.crystals,
-            rounds: state.player.rounds, xp: state.player.xp });
+            rounds: state.player.rounds, xp: state.player.xp, pvp_wins: state.player.pvpWins || 0 });
         updateCollection();
         renderMiniCards();
     }
@@ -9700,6 +9706,7 @@ async function startTelegramPreview() {
         readOnly = true;
         refreshRollActions();
         originalPlayer = profile.player;
+        originalProfile = profile;
         myUsernames = profile.usernames.filter(row => /^@?[a-z0-9_]{1,50}$/i.test(row.name)).map(row => ({
             id: row.id, name: row.name, price: Number(row.price) || 0, history: row.history,
             boughtAt: Date.parse(row.bought_at), isMain: row.is_main
@@ -9725,9 +9732,27 @@ async function startTelegramPreview() {
         renderMiniCards();
         notice.textContent = 'Прежний профиль привязан. Баланс и коллекция доступны для просмотра.';
     }
+
+    async function store() {
+        const data = await api({ action:'store' });
+        if (originalProfile) window.COLLECTOR_CARDS?.setTelegramCollection({ ...originalProfile,
+            cards:[...originalProfile.cards, ...data.owned] });
+        return data;
+    }
+
+    async function buyStore(action, fields) {
+        if (walletScope !== 'original') throw Object.assign(new Error('Покупка доступна с основным профилем.'), { status:409 });
+        if (isRolling || rollActionBusy || buying) throw new Error('Дождись завершения текущей операции.');
+        buying = true;
+        try {
+            const state = await api({ action, ...fields });
+            renderState(state);
+            return state;
+        } finally { buying = false; }
+    }
     async function changeItems(action, numbers) {
         if (readOnly) throw new Error('Изменение прежней коллекции пока недоступно.');
-        if (bindButton.disabled) throw new Error('Дождись завершения привязки профиля.');
+        if (bindButton.disabled || buying) throw new Error('Дождись завершения текущей операции.');
         const ids = numbers.map(number => number.id).sort();
         const key = action + ':' + ids.join(',');
         const requestId = pendingItems.get(key) || crypto.randomUUID();
@@ -9746,7 +9771,7 @@ async function startTelegramPreview() {
         }
     }
     async function roll(count) {
-        if (readOnly || isRolling || rollActionBusy || bindButton.disabled) return;
+        if (readOnly || isRolling || rollActionBusy || bindButton.disabled || buying) return;
         isRolling = true;
         document.getElementById('tariffButton').disabled = true;
         document.getElementById('roamButton').disabled = true;
@@ -9810,7 +9835,7 @@ async function startTelegramPreview() {
         const state = await api({ action: 'login', initData: app.initData });
         session = state.session;
         const profile = await api({ action: 'profile' });
-        telegramGame = { roll, canRoll: () => !readOnly, save: async number => {
+        telegramGame = { roll, store, buyStore, duel: api, canPurchase: () => walletScope === 'original', canRoll: () => !readOnly, save: async number => {
             await changeItems('save', [number]);
             showToast('success', 'Номер сохранён!', number.formatted);
         }, sell: async numbers => {
@@ -16374,7 +16399,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     return issuedCards(data || [], purchased.data || []);
   }
   function loadPlayer(id, force = false) {
-    if (telegramPreview) return Promise.resolve();
+    if (telegramPreview) return force && id != null ? telegramGame?.store() || Promise.resolve() : Promise.resolve();
     const key = String(id);
     if (reading.has(key)) return reading.get(key);
     if (writing.has(key) || (!force && Date.now() - (known.get(key)?.at || 0) < 30000)) return Promise.resolve();
@@ -16972,7 +16997,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const onDisplay = lots.filter(lot => saleEnd(lot) > now);
     if (details.open && !onDisplay.some(lot => lot.id === details.dataset.shopId)) details.close();
     const visible = onDisplay.filter(lot => filter === 'all' || lot.rarity === filter);
-    let previous; try { previous = JSON.parse(localStorage.getItem('card_shop_pending_' + player()?.id) || 'null'); } catch (_) {}
+    let previous; try { previous = JSON.parse(localStorage.getItem(cardStorage(player()?.id)) || 'null'); } catch (_) {}
     const retryButton = previous ? '<div class="cs-empty">Результат предыдущей покупки не подтверждён. <button type="button" data-nx="buy-card" data-shop-id="'+esc(previous.shopId)+'" data-currency="'+esc(previous.currency)+'">Проверить покупку</button></div>' : '';
     if (!visible.length) { grid.innerHTML = retryButton + '<div class="cs-empty">'+(onDisplay.length ? 'В этой категории пока нет карт' : 'В магазине пока нет карт')+'</div>'; return; }
     grid.innerHTML = retryButton + visible.map(lot => {
@@ -17010,7 +17035,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const panel = document.getElementById(section === 'crystals' ? 'shopCrystalsSection' : 'shopCardsSection');
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) panel.animate?.([{opacity:.45,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:180});
   }
-  const crystalStorage = id => 'simgame_crystal_pending_' + id;
+  const crystalStorage = id => (telegramPreview ? 'tg_' : '') + 'simgame_crystal_pending_' + id;
+  const cardStorage = id => (telegramPreview ? 'tg_' : '') + 'card_shop_pending_' + id;
   function pendingCrystals(id) {
     try { return JSON.parse(localStorage.getItem(crystalStorage(id)) || 'null'); } catch (_) { return null; }
   }
@@ -17043,7 +17069,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     if (!packs.length) packsGrid.innerHTML = '<div class="cs-empty">Загружаем предложения…</div>';
     packsLoading = (async () => {
       try {
-        const {data,error} = await _supabase.from('crystal_store_packs').select('*').order('sort_order').order('id');
+        const {data,error} = telegramPreview ? {data:(await telegramGame.store()).packs}
+          : await _supabase.from('crystal_store_packs').select('*').order('sort_order').order('id');
         if(error) throw error;
         packs = data || [];
         renderCrystalPacks();
@@ -17060,6 +17087,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     if (!pack || packBusy || confirmPack.open) return;
     const me = player();
     if (!me) { X.fail('Войди в игру для покупки'); return; }
+    if (telegramPreview && !telegramGame?.canPurchase()) { X.fail('Покупка доступна с основным профилем'); return; }
     if (pendingCrystals(me.id)) { renderCrystalPacks(); return; }
     if (balance < Number(pack.price_rub)) { X.fail('Недостаточно игровых рублей'); return; }
     selectedPack = pack;
@@ -17073,7 +17101,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     const slot = crystalStorage(me.id);
     let pending = pendingCrystals(me.id), key;
     try {
-      key = purchaseKey(me.id);
+      if (!telegramPreview) key = purchaseKey(me.id);
       if (!pending && pack) {
         pending = {id:pack.id,revision:pack.revision,request:crypto.randomUUID()};
         localStorage.setItem(slot, JSON.stringify(pending));
@@ -17085,6 +17113,12 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     renderCrystalPacks();
     const task = _saveChain.then(async () => {
       if (String(player()?.id) !== String(me.id)) return;
+      if (telegramPreview) {
+        const data = await telegramGame.buyStore('buy-pack', {itemId:pending.id,revision:pending.revision,requestId:pending.request});
+        localStorage.removeItem(slot);
+        X.toast('Зачислено ' + X.gems(data.granted));
+        return;
+      }
       await _saveBalanceNow();
       const beforeB = balance, beforeC = userCrystals;
       const {data,error} = await _supabase.rpc('buy_crystal_store_pack',{
@@ -17107,12 +17141,12 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     });
     _saveChain = task.catch(() => {});
     try { await task; }
-    catch(error) { X.fail(esc(error.message || 'Не удалось подтвердить покупку')); if (error.code === 'P0001') void loadCrystalPacks(); }
+    catch(error) { if (telegramPreview && error.status >= 400 && error.status < 500) localStorage.removeItem(slot); X.fail(esc(error.message || 'Не удалось подтвердить покупку')); if (error.code === 'P0001' || error.status === 409) void loadCrystalPacks(); }
     finally { packBusy = false; renderCrystalPacks(); }
   }
   async function load() {
     loaded = false; renderCardShop();
-    try { const {data,error} = await _supabase.from('card_shop').select('*').order('is_new',{ascending:false}); if(error) throw error; lots = (data || []).filter(lot => lot.is_listed !== false && !retiredLots.has(lot.id)); loaded = true; renderCardShop(); }
+    try { const {data,error} = telegramPreview ? {data:(await telegramGame.store()).cards} : await _supabase.from('card_shop').select('*').order('is_new',{ascending:false}); if(error) throw error; lots = (data || []).filter(lot => lot.is_listed !== false && !retiredLots.has(lot.id)); loaded = true; renderCardShop(); }
     catch(e) {
       console.warn('card shop',e);
       const message = e?.code === 'PGRST205' || e?.code === '42P01'
@@ -17142,7 +17176,8 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
   async function buyShopCard(shopId, currency) {
     const me = player(), lot = lots.find(x => String(x.id) === String(shopId));
     if (busy || !me) { if(!me) X.fail('Войди в игру для покупки'); return; }
-    const storageKey = 'card_shop_pending_' + me.id;
+    if (telegramPreview && !telegramGame?.canPurchase()) { X.fail('Покупка доступна с основным профилем'); return; }
+    const storageKey = cardStorage(me.id);
     let pending; try { pending = JSON.parse(localStorage.getItem(storageKey) || 'null'); } catch (_) {}
     const retry = pending && pending.shopId === shopId && pending.currency === currency;
     if (!retry && (!lot || !available(lot))) {
@@ -17154,14 +17189,24 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     if (!retry && !validPrice(price)) return;
     if (!retry && (currency === 'crystals' ? userCrystals : balance) < Number(price)) { X.fail('Недостаточно средств'); return; }
     let key;
-    try { key = purchaseKey(me.id); }
+    try { if (!telegramPreview) key = purchaseKey(me.id); }
     catch { X.fail('Разреши сохранение данных сайта, чтобы купить карту'); return; }
-    busy = true; renderCardShop();
     // Повтор после неопределённого ответа использует тот же идентификатор операции.
-    if (!pending) { pending = {shopId,currency,requestId:crypto.randomUUID()}; localStorage.setItem(storageKey,JSON.stringify(pending)); }
+    if (!pending) {
+      pending = {shopId,currency,expectedPrice:Number(price),requestId:crypto.randomUUID()};
+      try { localStorage.setItem(storageKey,JSON.stringify(pending)); }
+      catch (_) { X.fail('Разреши сохранение данных сайта, чтобы купить карту'); return; }
+    }
+    busy = true; renderCardShop();
     if (pending.shopId !== shopId || pending.currency !== currency) { X.fail('Сначала повтори предыдущую покупку для проверки её результата'); busy=false; renderCardShop(); return; }
     const task = _saveChain.then(async () => {
       if (String(player()?.id) !== String(me.id)) throw new Error('Игрок сменился');
+      if (telegramPreview) {
+        await telegramGame.buyStore('buy-card', {itemId:shopId,currency,expectedPrice:pending.expectedPrice,requestId:pending.requestId});
+        localStorage.removeItem(storageKey);
+        X.toast('Карта добавлена в коллекцию');
+        return;
+      }
       await _saveBalanceNow();
       const beforeB = balance, beforeC = userCrystals;
       const {data,error} = await _supabase.rpc('buy_card_shop_browser', {
@@ -17185,7 +17230,7 @@ html.perf-lite .cc-drawer .cc-spkf,html.perf-lite .cc-drawer .cc-bic.cc-holo{ani
     });
     _saveChain = task.catch(() => {});
     let failure;
-    try { await task; } catch (error) { failure = error; console.warn('card shop purchase', error); }
+    try { await task; } catch (error) { if (telegramPreview && error.status >= 400 && error.status < 500) localStorage.removeItem(storageKey); failure = error; console.warn('card shop purchase', error); }
     finally { busy=false; await load(); }
     if (failure?.message === 'Карта распродана или предложение завершено' && loaded) {
       const latest = lots.find(item => String(item.id) === String(shopId));
@@ -17728,9 +17773,9 @@ button.dev-gift-mark:active { scale:.94; }
     choose.value = eligible.some(n => String(n.id) === selected) ? selected : '';
   }
   function render() {
-    const pid = String(account()?.id);
+    const pid = telegramPreview ? 'me' : String(account()?.id);
     const bound = Boolean(lobby?.bound), ownOpen = lobby?.history.some(item => item.status === 'open');
-    binding.hidden = !lobby || !account() || bound;
+    binding.hidden = telegramPreview || !lobby || !account() || bound;
     createButton.disabled = busy || !bound || !choose.value || ownOpen;
     choose.disabled = busy;
     const empty = text => '<div class="pv-empty">'+text+'</div>';
@@ -17741,7 +17786,7 @@ button.dev-gift-mark:active { scale:.94; }
     }).join('') : empty(lobby ? 'Пока нет открытых вызовов' : 'Проверяем арену…');
     const recent = lobby?.history.length ? lobby.history.map(d => {
       const title = d.status === 'finished' ? (!d.winner_id ? 'Ничья' : d.winner_id === pid ? 'Победа' : 'Поражение')
-        : {open:'Ждёт соперника',cancelled:'Вызов отменён',expired:'Срок вызова истёк'}[d.status];
+        : {open:'Ждёт соперника',cancelled:'Вызов отменён',expired:'Срок вызова истёк',unavailable:'Номер больше недоступен'}[d.status];
       const finished = d.status === 'finished';
       return `<div class="pv-row"><div><b>${title}</b>${finished?'<small>'+ruleLabels[d.rule]+'</small>':''}</div>
         ${d.status === 'open' && !lobby.open.some(invite => invite.id === d.id) ? `<button type="button" class="pv-action" data-pvp="cancel" data-duel="${esc(d.id)}" ${busy?'disabled':''}>Отменить</button>` : ''}
@@ -17756,13 +17801,18 @@ button.dev-gift-mark:active { scale:.94; }
     const turn = epoch, version = ++readVersion;
     reading = true;
     try {
-      let args;
-      try { args = session(); }
-      catch (_) { args = {p_key:null,p_player_id:null}; }
-      const {data,error} = await _supabase.rpc('number_duel_lobby',args);
+      let data, error;
+      if (telegramPreview) data = await telegramGame.duel({ action:'duel-lobby' });
+      else {
+        let args;
+        try { args = session(); }
+        catch (_) { args = {p_key:null,p_player_id:null}; }
+        ({data,error} = await _supabase.rpc('number_duel_lobby',args));
+      }
       if (turn !== epoch || version !== readVersion) return;
       if (error) throw error;
       lobby = data;
+      if (telegramPreview && account()) account().pvp_wins = data.wins;
       render();
     } catch (error) {
       if (turn === epoch && version === readVersion && (showErrors || !lobby)) {
@@ -17778,24 +17828,25 @@ button.dev-gift-mark:active { scale:.94; }
     busy = true;
     render();
     try {
-      const args = session();
+      const args = telegramPreview ? {p_player_id:'me'} : session();
       if (action === 'create') {
         if (pendingCreate?.number !== numberId) pendingCreate = {number:numberId,id:crypto.randomUUID()};
         id = pendingCreate.id;
       }
-      const {data,error} = await _supabase.rpc('number_duel_action',{...args,p_action:action,p_duel_id:id,p_number_id:numberId});
+      const {data,error} = telegramPreview ? {data:await telegramGame.duel({ action:'duel-'+action, duelId:id, numberId })}
+        : await _supabase.rpc('number_duel_action',{...args,p_action:action,p_duel_id:id,p_number_id:numberId});
       if (error) throw error;
       if (action === 'create') pendingCreate = null;
       if (turn !== epoch) return;
       const winner = data.winner_id;
-      status.textContent = data.status === 'finished' ? (winner == null ? 'Ничья' : winner === args.p_player_id ? 'Победа записана в рейтинг PvP' : 'Соперник выиграл дуэль')
+      status.textContent = data.status === 'finished' ? (winner == null ? 'Ничья' : winner === args.p_player_id ? (telegramPreview ? 'Победа записана в профиль' : 'Победа записана в рейтинг PvP') : 'Соперник выиграл дуэль')
         : data.status === 'unavailable' ? 'Номер соперника больше не доступен' : data.status === 'open' ? 'Вызов открыт на 24 часа' : 'Вызов отменён';
       if (data.status === 'finished') {
         if (winner === args.p_player_id) window.XS?.sfx.win();
-        if (document.getElementById('ratingScreen').classList.contains('active')) void window.renderRating();
+        if (!telegramPreview && document.getElementById('ratingScreen').classList.contains('active')) void window.renderRating();
       }
     } catch (error) {
-      if (error.code === 'P0001') pendingCreate = null;
+      if (error.code === 'P0001' || (error.status >= 400 && error.status < 500)) pendingCreate = null;
       if (turn === epoch) status.textContent = error.message || 'Дуэль не подтверждена. Обнови арену или повтори.';
     } finally {
       busy = false;
@@ -17816,7 +17867,7 @@ button.dev-gift-mark:active { scale:.94; }
     fillNumbers();
     render();
     void refresh(true,true);
-    void loadNumbersFromDB().then(() => { if (turn === epoch && !busy) { fillNumbers(); render(); } }).catch(() => {});
+    if (!telegramPreview) void loadNumbersFromDB().then(() => { if (turn === epoch && !busy) { fillNumbers(); render(); } }).catch(() => {});
     clearInterval(interval);
     interval = setInterval(refresh,15000);
     screen.querySelector('.pv-back').focus({preventScroll:true});
