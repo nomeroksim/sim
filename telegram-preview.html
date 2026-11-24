@@ -6802,6 +6802,11 @@ function parseExcCfg(u) { if (typeof u !== 'string' || u.indexOf('exc:') !== 0) 
         const profileBalance = document.getElementById('profileBalance');
 
         let freeRolls = 0;
+        let freeRollsByTariff = {};
+        let upgradeDaily = null;
+        function tariffFreeRolls(tariff) {
+            return tariff === 'standard' ? freeRolls : Number(freeRollsByTariff[tariff]) || 0;
+        }
         let luckBoost = { x2: 0, x5: 0, x10: 0, x15: 0 };
         let luckTimerInterval = null;
         const TARIFFS = {
@@ -7313,7 +7318,7 @@ function getOpBadgeClass(opName) {
             if (boost > 1) {
                 const multipliers = { common: 1, rare: 1.08, epic: 1.2, legendary: 1.45, mythic: 1.8, secret: 2.2 };
                 Object.keys(weights).forEach(key => {
-                    if (key !== 'common') weights[key] *= 1 + (boost - 1) * (multipliers[key] - 1);
+                    if (key !== 'common') weights[key] *= 1 + (boost - 1) * (multipliers[key] - 1) / 3;
                 });
             }
             const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
@@ -7351,7 +7356,7 @@ function getOpBadgeClass(opName) {
             const tariff = TARIFFS[selectedTariff];
             document.getElementById('chancesPriceInfo').innerHTML =
                 escHtml(tariff.name) + ' · <b>' + tariff.price.toLocaleString('ru-RU') + ' ₽</b> за 1 номер · <b>' +
-                (tariff.price * 5).toLocaleString('ru-RU') + ' ₽</b> за ×5 · бесплатно: <b>' + freeRolls + '</b>';
+                (tariff.price * 5).toLocaleString('ru-RU') + ' ₽</b> за ×5 · бесплатно: <b>' + tariffFreeRolls(selectedTariff) + '</b>';
             const items = [
                 { key: 'common', name: 'Обычный', color: '#6b7280', percent: chances.common, example: '+7 928 135-53-24', price: 'от 50 ₽' },
                 { key: 'rare', name: 'Редкий', color: '#3b82f6', percent: chances.rare, example: '+7 964 343-34-43', price: 'от 1 500 ₽' },
@@ -7396,12 +7401,13 @@ function getOpBadgeClass(opName) {
             rollBtn.querySelectorAll('.free-badge').forEach(b => b.remove());
             rollX5Btn.querySelectorAll('.free-badge').forEach(b => b.remove());
             const count = x5Armed ? 5 : 1;
-            const paid = count - Math.min(freeRolls, count);
+            const available = tariffFreeRolls(selectedTariff);
+            const paid = count - Math.min(available, count);
             const price = paid * TARIFFS[selectedTariff].price;
             rollBtn.classList.toggle('free', paid === 0);
             rollBtn.classList.toggle('x5-armed', x5Armed);
             rollX5Btn.classList.toggle('armed', x5Armed);
-            rollX5Btn.classList.toggle('free', freeRolls >= 5 && !x5Armed);
+            rollX5Btn.classList.toggle('free', available >= 5 && !x5Armed);
             rollX5Btn.setAttribute('aria-pressed', String(x5Armed));
             rollX5Btn.title = x5Armed ? 'Выключить режим пяти круток' : 'Включить режим пяти круток';
             document.getElementById('tariffValue').textContent = TARIFFS[selectedTariff].name;
@@ -7409,10 +7415,10 @@ function getOpBadgeClass(opName) {
                 ? (paid === 0 ? 'Крутить ×5 бесплатно' : 'Крутить ×5')
                 : (paid === 0 ? 'Крутить бесплатно' : 'Крутить');
             document.getElementById('rollBtnPrice').textContent = paid === 0 ? '' : price.toLocaleString('ru-RU') + ' ₽';
-            if (freeRolls > 0) {
+            if (available > 0) {
                 const badge = document.createElement('span');
                 badge.className = 'free-badge';
-                badge.textContent = freeRolls > 99 ? '99+' : freeRolls;
+                badge.textContent = available > 99 ? '99+' : available;
                 rollBtn.appendChild(badge);
             }
         }
@@ -8311,7 +8317,7 @@ let forcedRarityKey = null;
             const tariff = TARIFFS[selectedTariff];
             const chances = calculateChances(selectedTariff);
             const roaming = selectedRoaming;
-            const freeUsed = Math.min(freeRolls, count);
+            const freeUsed = Math.min(tariffFreeRolls(selectedTariff), count);
             const totalCost = tariff.price * (count - freeUsed);
             if (balance < totalCost) {
                 showToast('error', 'Недостаточно средств', 'Для ' + count + ' круток нужно ' + totalCost.toLocaleString('ru-RU') + ' ₽');
@@ -10008,6 +10014,8 @@ async function startTelegramPreview() {
     function acceptPass(pass) {
         if (!pass) return;
         freeRolls = pass.freeRolls;
+        freeRollsByTariff = pass.freeRollsByTariff || {};
+        updateRollButtons();
         for (const key of Object.keys(luckBoost)) luckBoost[key] = Number(pass.luck[key]) || 0;
         updateLuckUI();
         if (getActiveBoost()) startLuckTimer();
@@ -10024,11 +10032,12 @@ async function startTelegramPreview() {
             ratingProfiles.clear();
             window.TELEGRAM_RATING?.clear();
             window.PROFILE_LIKES?.clear();
-            passCards = []; shopCards = []; cardVault = null; freeRolls = 0;
+            passCards = []; shopCards = []; cardVault = null; freeRolls = 0; freeRollsByTariff = {};
             for (const key of Object.keys(luckBoost)) luckBoost[key] = 0;
             window.TELEGRAM_PASS?.clear();
         }
         walletScope = scope;
+        if (state.upgradeDaily) upgradeDaily = state.upgradeDaily;
         if (state.cardVault) {
             cardVault = state.cardVault;
             ratingProfiles.clear();
@@ -14768,7 +14777,7 @@ svg.i{display:block;flex:none}
     <div class="main">
       <div class="forge">
         <div class="forge-head">
-          <span class="t">КАМЕРА 07</span>
+          <span class="t" id="upgradeDailyLabel">КАМЕРА 07</span>
           <span class="st" id="forgeStatus"><i></i>ОЖИДАНИЕ</span>
         </div>
 
@@ -14954,7 +14963,7 @@ function sync(){
     }catch(e){}
     hideResult();
   }
-  S.cards=state.cards;S.rub=state.rub;S.cry=state.cry;
+  S.cards=state.cards;S.rub=state.rub;S.cry=state.cry;S.daily=state.daily;
   if(!card()){S.selId=null;S.protect=false;}
 }
 function save(){
@@ -14972,10 +14981,12 @@ function protectCost(){var c=card();if(!c)return 0;return BR.protectCost(c.price
 function targetRarity(c,j){var i=RORDER.indexOf(c.rarity);return RORDER[Math.min(i+j,RORDER.length-1)];}
 function targetSecret(c,j){
  var start=c.rarity==='secret'?Math.max(0,SECRET_LADDER.indexOf(c.number))+j:j-1;
+ var price=prize(c.price,JUMPS[j-1]);
  return SECRET_LADDER.slice(Math.min(start,SECRET_LADDER.length-1)).find(function(value){
-   return !S.cards.some(function(item){return item.number===value;});
+   return (!BR.play||value!=='0123456789'||price>=750000000)&&!S.cards.some(function(item){return item.number===value;});
  });
 }
+function secretTooCheap(c,j){return BR.play&&targetRarity(c,j.n)==='secret'&&prize(c.price,j)<400000000;}
 function isMaxed(c){return c&&c.rarity==='secret'&&(c.secret||c.number)==='0123456789';}
 
 /* кольцо */
@@ -15007,7 +15018,7 @@ function renderPreview(){var c=card(),el=$('#preview');
 if(!c){el.innerHTML='<span class="tp" style="--c:var(--faint);--cb:rgba(255,255,255,.05);--cl:var(--hair)"><i></i>Выбери карту</span>';return;}
 if(c.locked){el.textContent='Номер защищён. Сними защиту в коллекции.';return;}if(isMaxed(c)){el.innerHTML='<span class="tp-max">'+ic('crown',12)+'ВЕРШИНА · 0123456789</span>';return;}
 var from=RAR[c.rarity],toR=targetRarity(c,jump().n),toLabel,toColor;
-if(toR==='secret'){var sv=targetSecret(c,jump().n);if(!sv){el.textContent='Нет свободного секретного номера для этого уровня';return;}toLabel='Секрет «'+sv+'»';toColor=RAR.secret.color;}
+if(toR==='secret'){if(secretTooCheap(c,jump())){el.textContent='Секрет доступен при цене выигрыша от 400 млн ₽';return;}var sv=targetSecret(c,jump().n);if(!sv){el.textContent='Нет свободного секретного номера для этого уровня';return;}toLabel='Секрет «'+sv+'»';toColor=RAR.secret.color;}
 else{toLabel=RAR[toR].label;toColor=RAR[toR].color;}
 el.innerHTML='<span class="tp" style="--c:'+from.color+';--cb:'+rgba(from.color,.13)+';--cl:'+rgba(from.color,.4)+'"><i></i>'+esc(c.rarity==='secret'?('Секрет «'+(c.secret||c.number)+'»'):from.label)+'</span>'+
 '<span class="tp-arrow">'+ic('arrow',15)+'</span>'+
@@ -15027,8 +15038,11 @@ var up=$('#upBtn');
 if(G.busy){up.innerHTML=ic('rotate',15)+'Курсор крутится…';up.disabled=true;}
 else if(!c){up.innerHTML=ic('sim',15)+'Выбери карту';up.disabled=true;}
 else if(c.locked){up.textContent='Номер защищён';up.disabled=true;}else if(isMaxed(c)){up.innerHTML=ic('crown',15)+'Вершина редкости';up.disabled=true;}
+else if(S.daily===0){up.textContent='Лимит исчерпан · до 00:00 МСК';up.disabled=true;}
+else if(secretTooCheap(c,jump())){up.textContent='Секрет от 400 млн ₽';up.disabled=true;}
 else if(targetRarity(c,jump().n)==='secret'&&!targetSecret(c,jump().n)){up.textContent='Нет свободного секретного номера';up.disabled=true;}else{up.innerHTML=ic('zap',15)+'Крутить '+jump().label+' <span class="sub">'+jump().chance+'%</span>';up.disabled=false;}}
 function renderTop(){$('#balRub').textContent=fmt(S.rub);$('#balCry').textContent=fmt(S.cry);
+$('#upgradeDailyLabel').textContent=S.daily==null?'КАМЕРА 07':'ПОПЫТОК СЕГОДНЯ: '+S.daily+' / 15';
 var b=$('#sndBtn');b.innerHTML=ic(S.sound?'vol':'volx',16);b.classList.toggle('on',S.sound);b.setAttribute('aria-pressed',String(S.sound));b.setAttribute('aria-label',S.sound?'Выключить звук':'Включить звук');
 $('#menuBtn').innerHTML=ic('menu',16);
 var sb=$('#streakBox');sb.className='streak'+(S.stats.streak>0?'':' zero');
@@ -15107,6 +15121,7 @@ async function upgrade(){
  if(c.locked){renderAll();sfx.err();toast('Номер защищён','err');return;}
 if(isMaxed(c)){sfx.err();toast('Это вершина редкости','err');return;}
 var j=jump(),cost=S.protect?protectCost():0;
+if(S.daily===0||secretTooCheap(c,j)){renderAll();return;}
 if(S.protect&&S.cry<cost){sfx.err();toast('Не хватает кристаллов','err');S.protect=false;renderProtect();return;}
  G.busy=true;hideResult();renderButtons();renderProtect();
  setStatus('run','СОХРАНЯЕМ СТАВКУ');
@@ -15125,7 +15140,7 @@ if(S.protect&&S.cry<cost){sfx.err();toast('Не хватает кристалл�
    G.busy=false;sync();renderAll();setStatus('','СТАВКА НЕ ПРОШЛА');
    sfx.err();toast(esc(error.message||'Ошибка сохранения ставки'),'err');return;
  }
- S.protect=false;S.cry=settlement.cry;
+ S.protect=false;S.cry=settlement.cry;S.daily=BR.read().daily;
  S.stats.tries++;save();
  renderTop();renderJumps();renderProtect();renderButtons();
  setStatus('run','КУРСОР ВРАЩАЕТСЯ');
@@ -15259,6 +15274,9 @@ setStatus(S.selId?'ready':'',S.selId?'КАРТА В КАМЕРЕ':'ОЖИДАН�
 }
 boot();
 window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.querySelector('#drawer.open'))renderDrawer();}};
+if(BR.play) setInterval(function(){
+  if(!G.busy && S.daily!==BR.dailyRemaining()) window.SG_REACTOR_REFRESH();
+},15000);
 })();
 </reactor-script>
 </body>
@@ -15417,12 +15435,14 @@ window.SG_REACTOR_REFRESH=function(){if(!G.busy){sync();renderAll();if(document.
 
     let frame;
     const refresh = () => frame?.contentWindow.SG_REACTOR_REFRESH?.();
+    const dailyRemaining = () => telegramPreview && upgradeDaily
+        ? (Date.parse(upgradeDaily.resetAt) > Date.now() ? upgradeDaily.remaining : 15) : null;
     window.SG_REACTOR = {
-        secretLadder, prize, protectCost, settle, refresh, play: telegramPreview ? play : null,
+        secretLadder, prize, protectCost, settle, refresh, dailyRemaining, play: telegramPreview ? play : null,
         read: () => {
             const player = me();
             return { pid: player?.id ?? 'guest', cards: player ? savedNumbers.filter(available).map(cardView) : [],
-                rub: balance, cry: userCrystals };
+                rub: balance, cry: userCrystals, daily: dailyRemaining() };
         },
         close: () => {
             const screen = document.getElementById('upgradeGameScreen');
@@ -17072,7 +17092,10 @@ function rewardMeta(r) {
   switch (r.type) {
     case 'rub': return { name:'Рубли', amt:money(r.amount), icon:'coins', cls:'', desc:'Зачисляются на игровой баланс — для круток и покупок на маркете.' };
     case 'crystals': return { name:'Кристаллы', amt:cry(r.amount), icon:'gem', cls:'crystal', desc:'Премиальная валюта: юзы, особые лоты и Premium-пропуск.' };
-    case 'spins': return { name:'Бесплатные крутки', amt:'×' + r.amount, icon:'dice', cls:'spins', desc:'Добавляются к кнопке «Крутить бесплатно» на главном экране.' };
+    case 'spins': {
+      const tariff = TARIFFS[r.tariff || 'standard'] || TARIFFS.standard;
+      return { name:'Крутки · ' + tariff.name, amt:'×' + r.amount, icon:'dice', cls:'spins', desc:'Бесплатные крутки для тарифа «' + tariff.name + '».' };
+    }
     case 'luck': return { name:`Удача ×${r.mult}`, amt:r.min + ' мин', icon:'zap', cls:'luck', desc:'Сразу включается и повышает шансы редких и секретных номеров.' };
     case 'mysteryCard': return { name:'Случайная карточка', amt:'?', icon:'gift', cls:'', desc:'Случайная карточка попадёт в коллекцию после получения награды.' };
     case 'sim': return { name:r.label, amt:RAR[r.rarity].label, icon:'sim', cls:'', desc: r.special ? 'Секретная SIM «ФСБ» сразу в коллекцию.' : 'Случайный номер этой редкости сразу в твою коллекцию.' };
@@ -17329,7 +17352,7 @@ function renderStats() {
   }
   const pending = S.inventory.filter(item => !item.used).length;
   const values = [String(claimableRewards() + pending),String(S.claimedFree.length + S.claimedPrem.length),
-    String(fmt(freeRolls)), '×' + activeLuck()];
+    String(fmt(freeRolls + Object.values(freeRollsByTariff).reduce((sum,value) => sum + Number(value),0))), '×' + activeLuck()];
   values.forEach((value,index) => setPassText(passStatValues[index],value));
 }
 function rwState(t, track) {
