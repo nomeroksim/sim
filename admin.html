@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Админка · SIM CARD GAME</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root { color-scheme:dark; font-family:system-ui,sans-serif; background:#0c1512; color:#edf4eb }
+*,*::before,*::after { box-sizing:border-box }
+body { max-width:480px; margin:0 auto; padding:24px }
+h1,h2 { margin:0 0 12px }
+p { line-height:1.5 }
+button,input,select { font:inherit }
+#ownerAdminDialog { position:fixed; inset:0; margin:auto }
+#ownerAdminDialog header { position:sticky; top:-18px; padding:14px 0; background:#13241d }
+#adminEntry { padding:16px; border:1px solid #426255; border-radius:12px }
+#ownerAdminOpen[hidden] { display:none }
+#ownerAdminDialog { width:min(460px,calc(100% - 24px)); max-height:calc(100dvh - 32px); overflow:auto; margin:auto; padding:18px; border:1px solid #426255; border-radius:18px; background:#13241d; color:#edf4eb }
+#ownerAdminDialog::backdrop { background:#000a }
+#ownerAdminDialog header { display:flex; align-items:center; justify-content:space-between; gap:12px }
+#ownerAdminDialog form:not([method=dialog]),#ownerAdminDialog label,#ownerAdminFields { display:grid; gap:7px; margin-top:10px }
+#ownerAdminDialog #ownerAdminGrant[hidden] { display:none }
+#ownerAdminDialog input,#ownerAdminDialog select { width:100%; min-height:42px; padding:9px; border:1px solid #426255; border-radius:8px; background:#0b1512; color:inherit; font-size:16px }
+#ownerAdminDialog button { min-height:42px; padding:8px 12px; border:1px solid #426255; border-radius:8px; color:inherit; background:#254537 }
+#ownerAdminStatus { margin:10px 0 0; color:#b3e8cc }
+#ownerAdminStatus[data-error] { color:#ff9e9e }
+
+</style></head>
+<body>
+<h1>Админка SIM CARD GAME</h1>
+<p id="adminEntry" role="status">Проверяем аккаунт Telegram…</p>
+<button id="ownerAdminOpen" type="button" hidden>Открыть админку</button>
+    <dialog id="ownerAdminDialog" aria-labelledby="ownerAdminTitle">
+      <header><h2 id="ownerAdminTitle">Админка · dev</h2><form method="dialog"><button type="submit">Закрыть</button></form></header>
+      <form id="ownerAdminSearch">
+        <label>Игровой ID или ник<input name="query" type="search" maxlength="80" placeholder="Например, ID 1" autocomplete="off"></label>
+        <button type="submit">Найти игрока</button>
+      </form>
+      <form id="ownerAdminGrant" hidden>
+        <label>Получатель<select name="player" required></select></label>
+        <label>Что выдать<select name="command">
+          <option value="money">Рубли и кристаллы</option><option value="premium">Пропуск</option>
+          <option value="number">SIM-номер</option><option value="give-secret">Секретный номер</option>
+          <option value="exclusive">Эксклюзив</option><option value="give-username">Юз</option>
+          <option value="tag">Тег</option><option value="card">Карточку</option>
+        </select></label>
+        <div id="ownerAdminFields"></div>
+        <button type="submit">Выдать</button>
+      </form>
+      <p id="ownerAdminStatus" role="status"></p>
+    </dialog>
+
+<script>
+const TAGS=Object.fromEntries(Object.entries({helper:'Помощник',major:'Мажор',boy:'Пацанчик',cool:'Крутой',yard:'Лярд',legend:'Легенда сезона'}).map(([key,label])=>[key,{label}]));
+const escHtml=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ROAM_CODES=['7','1','44','67','99'];
+const OPERATORS=[{code:'910',name:'МТС'},{code:'920',name:'Мегафон'},{code:'905',name:'Билайн'},{code:'950',name:'Tele2'}];
+const ROAM_OPERATORS=[];
+function parseSpinNumber(raw) {
+    const text = String(raw || '').trim();
+    const digits = text.replace(/\D/g, '');
+    let prefix = '7', national = digits;
+    if (text.startsWith('+')) {
+        prefix = digits.slice(0, -10);
+        national = digits.slice(-10);
+        if (!ROAM_CODES.includes(prefix)) return null;
+    } else if (digits.length === 11 && /^[78]/.test(digits)) {
+        national = digits.slice(1);
+    }
+    if (national.length !== 10) return null;
+    return { prefix, code: national.slice(0, 3), digits: national.slice(3).split('').map(Number) };
+}
+
+
+function calculateUzRarity(username) {
+    const clean = String(username || '').trim().replace(/^@+/, '');
+    const len = clean.length;
+    // VIP-юзы (@vip и его варианты из боевого пропуска: @vip_s01, @vip01…) — всегда не ниже легендарного, в жёлтой рамке
+    if (/^vip(_?s?\d+)?$/i.test(clean) && len > 2) return 'legendary';
+
+    if (len >= 7) return 'common';
+    if (len === 6) return 'rare';
+    if (len === 5) return 'epic';
+    if (len >= 3 && len <= 4) return 'legendary';
+    if (len === 2) return 'mythic';
+    if (len === 1) return 'exclusive';
+    return 'common';
+}
+
+
+function setupOwnerMobileAdmin(isOwner, request) {
+    const dialog = document.getElementById('ownerAdminDialog');
+    const search = document.getElementById('ownerAdminSearch');
+    const grant = document.getElementById('ownerAdminGrant');
+    const fields = document.getElementById('ownerAdminFields');
+    const status = document.getElementById('ownerAdminStatus');
+    const recipients = grant.elements.namedItem('player');
+    const command = grant.elements.namedItem('command');
+    const searchButton = search.querySelector('button');
+    const grantButton = grant.querySelector('button');
+    let players = [], pending = null;
+    const price = '<label>Цена, ₽<input name="price" type="number" min="1" step="1" required></label>';
+    const rarity = '<label>Редкость<select name="rarity"><option value="common">Обычная</option><option value="rare">Редкая</option><option value="epic">Эпическая</option><option value="legendary">Легендарная</option><option value="mythic">Мифическая</option></select></label>';
+    const templates = {
+        money: '<label>Рубли<input name="rub" type="number" min="0" step="1" value="0" required></label><label>Кристаллы<input name="crystals" type="number" min="0" step="1" value="0" required></label>',
+        premium: '<label>Пропуск<select name="plan"><option value="base">Premium</option><option value="plus">Premium + 10 уровней</option></select></label>',
+        number: '<label>Номер<input name="formatted" placeholder="+7 910 123-45-67" inputmode="tel" maxlength="30" required></label>' + rarity + price,
+        'give-secret': '<label>Секретный номер<input name="formatted" inputmode="numeric" pattern="[0-9]{1,10}" maxlength="10" required></label>' + price,
+        exclusive: '<label>Название<input name="label" maxlength="12" required></label><label>Серийный номер<input name="serial" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required></label>' + price,
+        'give-username': '<label>Юз<input name="name" placeholder="@username" pattern="@[a-zA-Z0-9_]{1,32}" maxlength="33" required></label>',
+        tag: '<label>Тег<select name="tagKey">' + ['777','666','67','helper','major','boy','cool','yard','legend'].map(key =>
+            '<option value="' + key + '">' + escHtml(TAGS[key]?.label || key) + '</option>').join('') + '</select></label>',
+        card: '<label>ID карточки<input name="cardId" placeholder="SIM-EXAMPLE" maxlength="40" required></label>'
+            + rarity.replace('</select>','<option value="holo">Голографическая</option></select>')
+            + '<label>Тираж<input name="edition" type="number" min="1" step="1" value="1000" required></label><label>Номинал, SIM<input name="sim" type="number" min="0" max="99999" step="0.01" required></label><label>Дата выпуска<input name="release" type="date" required></label>' + price
+    };
+    function message(text, error = false) {
+        status.textContent = text;
+        status.toggleAttribute('data-error',error);
+    }
+    function payload(action, form) {
+        const value = key => String(form.get(key) || '').trim();
+        const amount = key => Number(value(key));
+        if (action === 'money') {
+            const rub = amount('rub'), crystals = amount('crystals');
+            if (!rub && !crystals) throw new Error('Укажи сумму выдачи.');
+            return {rub,crystals};
+        }
+        if (action === 'premium') return {plan:value('plan')};
+        if (action === 'tag') return {tagKey:value('tagKey'),equip:true};
+        if (action === 'give-username') {
+            const name = value('name'), rarity = calculateUzRarity(name);
+            return {name,rarity};
+        }
+        if (action === 'card') return {card:{id:value('cardId').toUpperCase(),rarity:value('rarity'),
+            edition:amount('edition'),sim:amount('sim'),release:value('release'),price:amount('price'),serial:null}};
+        if (action === 'give-secret') return {formatted:value('formatted'),price:amount('price'),uniqueId:'sec:{}'};
+        if (action === 'exclusive') {
+            const label = value('label').replace(/[<>"'\\]/g,''), serial = value('serial');
+            if (!label) throw new Error('Укажи название эксклюзива.');
+            return {formatted:label + ' · ' + serial.slice(-4),opName:'SECRET',rarity:'secret',price:amount('price'),
+                uniqueId:'exc:' + JSON.stringify({label,serial,op:'secret',rarity:'exclusive',series:'open',chip:'silver',frame:'obsidian',editionNo:1,editionTotal:500})};
+        }
+        const number = parseSpinNumber(value('formatted'));
+        if (!number) throw new Error('Введи SIM-номер в формате +7 910 123-45-67.');
+        const digits = number.digits.join('');
+        const operator = [...OPERATORS,...ROAM_OPERATORS].find(op => op.code === number.code);
+        return {formatted:`+${number.prefix} ${number.code} ${digits.slice(0,3)}–${digits.slice(3,5)}–${digits.slice(5,7)}`,
+            digits,opCode:number.code,opName:operator?.name || 'Роуминг',rarity:value('rarity'),price:amount('price')};
+    }
+    fields.innerHTML = templates[command.value];
+    command.addEventListener('change',() => { fields.innerHTML = templates[command.value]; });
+    document.getElementById('ownerAdminOpen').addEventListener('click',() => {
+        if (isOwner() && !dialog.open) dialog.showModal();
+    });
+    search.addEventListener('submit',async event => {
+        event.preventDefault();
+        if (searchButton.disabled || grantButton.disabled) return;
+        searchButton.disabled = true;
+        grant.hidden = true;
+        message('Ищем игрока…');
+        try {
+            const {players:found} = await request('search',{query:search.elements.namedItem('query').value.trim()});
+            players = found;
+            recipients.replaceChildren(...players.map(p => new Option(p.name + ' · ID ' + (p.public_id || '—'),p.id)));
+            grant.hidden = !players.length;
+            message(players.length ? '' : 'Игрок не найден.', !players.length);
+        } catch (error) { message(error.message || 'Не удалось найти игрока.',true); }
+        finally { searchButton.disabled = false; }
+    });
+    grant.addEventListener('submit',async event => {
+        event.preventDefault();
+        if (grantButton.disabled || searchButton.disabled) return;
+        const player = players.find(p => p.id === recipients.value), action = command.value;
+        if (!player) return;
+        let args;
+        try { args = {playerId:player.id,scope:player.scope,...payload(action,new FormData(grant))}; }
+        catch (error) { message(error.message,true); return; }
+        const stamp = JSON.stringify([action,args]);
+        if (pending?.stamp !== stamp) pending = {stamp,id:crypto.randomUUID()};
+        grantButton.disabled = true;
+        message('Выдаём награду…');
+        try {
+            await request(action,{...args,requestId:pending.id});
+            pending = null;
+            message('Выдано игроку ' + player.name + ' · ID ' + player.public_id);
+        } catch (error) {
+            if (error.status >= 400 && error.status < 500) pending = null;
+            message(error.message || 'Не удалось выдать награду.',true);
+        } finally { grantButton.disabled = false; }
+    });
+}
+
+
+(async () => {
+ const app=window.Telegram?.WebApp;
+ const entry=document.getElementById('adminEntry');
+ const opener=document.getElementById('ownerAdminOpen');
+ const endpoint='https://wftudhjdehkdhcmtcjkl.supabase.co/functions/v1/telegram-game';
+ let session='', owner=false;
+ async function api(body) {
+   const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},
+     cache:'no-store',body:JSON.stringify({...body,session})});
+   const data=await response.json().catch(()=>null);
+   if(!response.ok||!data)throw Object.assign(new Error(data?.error||'Сервер админки временно недоступен.'),{status:response.status});
+   return data;
+ }
+ if(!app?.initData){entry.textContent='Открой отдельное мини-приложение «Админка» в Telegram.';return;}
+ app.ready();
+ try {
+   const identity=await api({action:'owner-admin-login',initData:app.initData});
+   if(!identity.gameOwner||identity.publicId!=='dev'||!identity.session)throw new Error('Админка доступна только владельцу dev.');
+   owner=true;
+   session=identity.session;
+   setupOwnerMobileAdmin(()=>owner,(command,adminArgs)=>api({action:'owner-admin',command,adminArgs}));
+   opener.hidden=false;
+   entry.textContent='Аккаунт dev подтверждён.';
+   opener.click();
+ } catch(error){entry.textContent=error.message||'Не удалось открыть админку.';}
+})();
+</script></body></html>
