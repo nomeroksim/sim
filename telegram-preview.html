@@ -6815,9 +6815,9 @@ function parseExcCfg(u) { if (typeof u !== 'string' || u.indexOf('exc:') !== 0) 
             rare: { name: 'Редкий', price: 1000, color: '#74b6ff',
                 weights: { common: 50, rare: 34, epic: 14, legendary: 1.9, mythic: 0.099, secret: 0.001 } },
             epic: { name: 'Эпический', price: 25000, color: '#c49bff',
-                weights: { common: 0, rare: 0, epic: 94, legendary: 5.5, mythic: 0.49, secret: 0.01 } },
-            legendary: { name: 'Легендарный', price: 45000, color: '#f3cd78',
-                weights: { common: 0, rare: 0, epic: 75, legendary: 22, mythic: 2.9, secret: 0.1 } }
+                weights: { common: 0, rare: 0, epic: 97.79, legendary: 2, mythic: 0.20, secret: 0.01 } },
+            legendary: { name: 'Легендарный', price: 150000, color: '#f3cd78',
+                weights: { common: 0, rare: 0, epic: 86.9, legendary: 12, mythic: 1, secret: 0.1 } }
         };
         let selectedTariff = 'standard';
         let x5Armed = false;
@@ -8329,7 +8329,8 @@ let forcedRarityKey = null;
             document.getElementById('roamButton').disabled = true;
             refreshRollActions();
             balance -= totalCost;
-freeRolls -= freeUsed;
+if (selectedTariff === 'standard') freeRolls -= freeUsed;
+else if (freeUsed) freeRollsByTariff[selectedTariff] -= freeUsed;
 // Списание, счётчик круток и опыт пишем в базу ОДНИМ запросом и не ждём ответа —
 // анимация начинается сразу, а не после двух запросов к серверу
 const me = allPlayers.find(p => p.isMe);
@@ -16822,12 +16823,12 @@ const TRACK = [
  {l:11,f:rw('rub',{amount:1500}),p:rw('crystals',{amount:120})},
  {l:12,f:rw('spins',{amount:2}),p:rw('rub',{amount:6000})},
  {l:13,f:rw('crystals',{amount:50}),p:rw('luck',{mult:5,min:40})},
- {l:14,f:rw('rub',{amount:2000}),p:rw('spins',{amount:4})},
+ {l:14,f:rw('rub',{amount:2000}),p:rw('spins',{amount:4,tariff:'rare'})},
  {l:15,f:rw('spins',{amount:2}),p:rw('chip',{name:'Обсидиановый чип'}),m:1},
  {l:16,f:rw('crystals',{amount:60}),p:rw('rub',{amount:8000})},
  {l:17,f:rw('rub',{amount:3000}),p:rw('crystals',{amount:180})},
  {l:18,f:rw('luck',{mult:2,min:40}),p:rw('holo',{name:'SG-печать'})},
- {l:19,f:rw('spins',{amount:3}),p:rw('luck',{mult:10,min:40})},
+ {l:19,f:rw('spins',{amount:3,tariff:'rare'}),p:rw('luck',{mult:10,min:40})},
  {l:20,f:rw('crystals',{amount:90}),p:rw('sim',{rarity:'mythic',label:'Мифическая SIM'}),m:1},
  {l:21,f:rw('rub',{amount:4500}),p:rw('spins',{amount:6})},
  {l:22,f:rw('spins',{amount:3}),p:rw('crystals',{amount:300})},
@@ -16836,7 +16837,7 @@ const TRACK = [
  {l:25,f:rw('luck',{mult:5,min:30}),p:rw('uz',{name:'@vip',color:'#E7BC55'}),m:1},
  {l:26,f:rw('spins',{amount:4}),p:rw('crystals',{amount:450})},
  {l:27,f:rw('crystals',{amount:150}),p:rw('luck',{mult:10,min:60})},
- {l:28,f:rw('rub',{amount:8000}),p:rw('spins',{amount:8})},
+ {l:28,f:rw('rub',{amount:8000}),p:rw('spins',{amount:8,tariff:'epic'})},
  {l:29,f:rw('spins',{amount:5}),p:rw('tag',{name:'Легенда сезона'})},
  {l:30,f:rw('sim',{rarity:'legendary',label:'Легендарная SIM'}),p:rw('sim',{rarity:'secret',label:'ФСБ · Голограмма',special:1}),m:1},
  {l:31,f:rw('rub',{amount:10000}),p:rw('crystals',{amount:500})},
@@ -16847,7 +16848,7 @@ const TRACK = [
  {l:36,f:rw('crystals',{amount:200}),p:rw('rub',{amount:45000})},
  {l:37,f:rw('rub',{amount:15000}),p:rw('crystals',{amount:600})},
  {l:38,f:rw('luck',{mult:5,min:40}),p:rw('spins',{amount:10})},
- {l:39,f:rw('spins',{amount:6}),p:rw('luck',{mult:15,min:30})},
+ {l:39,f:rw('spins',{amount:6,tariff:'epic'}),p:rw('luck',{mult:15,min:30})},
  {l:40,f:rw('crystals',{amount:250}),p:rw('sim',{rarity:'mythic',label:'Мифическая SIM'}),m:1},
  {l:41,f:rw('rub',{amount:18000}),p:rw('crystals',{amount:750})},
  {l:42,f:rw('spins',{amount:7}),p:rw('rub',{amount:60000})},
@@ -16857,7 +16858,7 @@ const TRACK = [
  {l:46,f:rw('spins',{amount:8}),p:rw('crystals',{amount:900})},
  {l:47,f:rw('crystals',{amount:350}),p:rw('rub',{amount:80000})},
  {l:48,f:rw('rub',{amount:25000}),p:rw('luck',{mult:15,min:60})},
- {l:49,f:rw('spins',{amount:10}),p:rw('spins',{amount:15})},
+ {l:49,f:rw('spins',{amount:10}),p:rw('spins',{amount:15,tariff:'legendary'})},
  {l:50,f:rw('mysteryCard'),p:rw('crystals',{amount:1200}),m:1}
 ];
 const CARD_CHANCES = [
@@ -17363,7 +17364,7 @@ function rwState(t, track) {
   return 'locked';
 }
 function rewardCard(t, track, st = rwState(t,track)) {
-  const r = track === 'p' ? t.p : t.f, m = rewardMeta(r);
+  const r = trackReward(t,track,st), m = rewardMeta(r);
   const stateHtml = st === 'claimed' ? `<div class="rw-state done">${ic('check',11)}Получено</div>`
     : st === 'premlock' ? `<div class="rw-state premlock">${ic('crown',11)}Premium</div>`
     : st === 'claimable' && r.type === 'mysteryCard' ?
@@ -17376,6 +17377,11 @@ function rewardCard(t, track, st = rwState(t,track)) {
     <div class="rw-name">${esc(m.name)}</div>
     <div class="rw-amt num">${esc(m.amt)}</div>
     ${stateHtml}</div>`;
+}
+function trackReward(tier, track, state) {
+  const reward = track === 'p' ? tier.p : tier.f;
+  if (state !== 'claimed' || !reward.tariff) return reward;
+  return S.inventory.find(item => item.track === track && item.lvl === tier.l)?.r || reward;
 }
 let passTrackNodes, passTrackRails, passTrackStamp = '';
 function renderTrack() {
@@ -17604,7 +17610,14 @@ async function applyReward(r) {
   switch (r.type) {
     case 'rub': balance += r.amount; refreshGameUI(); await saveBalanceToDB(); return null;
     case 'crystals': userCrystals += r.amount; refreshGameUI(); await saveBalanceToDB(); return null;
-    case 'spins': freeRolls += r.amount; updateRollButtons(); try { renderChancesScreen(); } catch (e) {} return null;
+    case 'spins': {
+      const tariff = r.tariff || 'standard';
+      if (tariff === 'standard') freeRolls += r.amount;
+      else freeRollsByTariff[tariff] = tariffFreeRolls(tariff) + r.amount;
+      updateRollButtons();
+      try { renderChancesScreen(); } catch (e) {}
+      return null;
+    }
     case 'luck': activateLuckBoost('x' + r.mult, r.min); return null;
     case 'sim': return await giveSim(r);
     case 'uz': return await giveUz(r);
@@ -17698,7 +17711,7 @@ function openDrawer(html) { lastFocus = document.activeElement; $('#bpDrawerBody
 function closeDrawer() { $('#bpDrawer').classList.remove('open'); if (!$('#bpPremiumModal').classList.contains('show')) $('#bpScrim').classList.remove('show'); if (lastFocus && lastFocus.focus) lastFocus.focus({ preventScroll: true }); }
 function rewardInfo(lvl, track) {
   const t = TRACK.find(x => x.l === lvl); if (!t) return;
-  const r = track === 'p' ? t.p : t.f, m = rewardMeta(r), st = rwState(t, track);
+  const st = rwState(t, track), r = trackReward(t,track,st), m = rewardMeta(r);
   const canSendCard = st === 'claimable' && r.type === 'mysteryCard';
   const stateTxt = st === 'claimed' ? 'Уже получено' : st === 'premlock' ? 'Нужен Premium-пропуск' :
     canSendCard ? 'Можно отправить в «Награды»' : st === 'claimable' || st === 'queued' ?
@@ -17882,7 +17895,7 @@ window.closeBattlePass = function () {
 let restored = false;
 window.bpPersistLocal = function () {
   if (!restored || !me()) return;
-  try { localStorage.setItem('bp_local_' + pid(), JSON.stringify({ freeRolls, luckBoost })); } catch (e) {}
+  try { localStorage.setItem('bp_local_' + pid(), JSON.stringify({ freeRolls, freeRollsByTariff, luckBoost })); } catch (e) {}
 };
 window.bpRestoreLocal = function () {
   if (me()) {
@@ -17890,6 +17903,10 @@ window.bpRestoreLocal = function () {
       const d = JSON.parse(localStorage.getItem('bp_local_' + pid()));
       if (d) {
         if (Number.isFinite(d.freeRolls) && d.freeRolls > 0) freeRolls = Math.floor(d.freeRolls);
+        for (const tariff of Object.keys(TARIFFS)) {
+          const amount = d.freeRollsByTariff?.[tariff];
+          if (tariff !== 'standard' && Number.isSafeInteger(amount) && amount > 0) freeRollsByTariff[tariff] = amount;
+        }
         if (d.luckBoost) Object.keys(luckBoost).forEach(k => { const v = Number(d.luckBoost[k]) || 0; if (v > luckBoost[k]) luckBoost[k] = v; });
       }
     } catch (e) {}
