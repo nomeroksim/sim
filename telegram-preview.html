@@ -5364,9 +5364,15 @@ function updateMythicNumbers() {
 #telegramEntryStatus:not([hidden]) { position:fixed; inset:0; z-index:10000; display:grid; place-content:center; justify-items:center; gap:12px; padding:20px; text-align:center; background:#0b1512; color:#e0eee7 }
 #telegramEntryStatus button { min-height:44px; padding:0 14px; border:1px solid #385448; border-radius:10px; background:#1c3328; color:inherit }
 #ownerAdminOpen[hidden] { display:none }
-#ownerAdminDialog { width:min(420px,calc(100% - 32px)); margin:auto; padding:20px; border:1px solid #426255; border-radius:18px; background:#13241d; color:#edf4eb }
+#ownerAdminDialog { width:min(460px,calc(100% - 24px)); max-height:calc(100dvh - 32px); overflow:auto; margin:auto; padding:18px; border:1px solid #426255; border-radius:18px; background:#13241d; color:#edf4eb }
 #ownerAdminDialog::backdrop { background:#000a }
-#ownerAdminDialog input { width:100%; margin:14px 0; padding:10px; border:1px solid #426255; border-radius:8px; background:#0b1512; color:inherit }
+#ownerAdminDialog header { display:flex; align-items:center; justify-content:space-between; gap:12px }
+#ownerAdminDialog form:not([method=dialog]),#ownerAdminDialog label,#ownerAdminFields { display:grid; gap:7px; margin-top:10px }
+#ownerAdminDialog #ownerAdminGrant[hidden] { display:none }
+#ownerAdminDialog input,#ownerAdminDialog select { width:100%; min-height:42px; padding:9px; border:1px solid #426255; border-radius:8px; background:#0b1512; color:inherit; font-size:16px }
+#ownerAdminDialog button { min-height:42px; padding:8px 12px; border:1px solid #426255; border-radius:8px; color:inherit; background:#254537 }
+#ownerAdminStatus { margin:10px 0 0; color:#b3e8cc }
+#ownerAdminStatus[data-error] { color:#ff9e9e }
 #telegramEntryStatus.is-launch { place-content:center; grid-template-columns:minmax(0,470px); overflow:auto; padding: max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom)); background:radial-gradient(ellipse at 50% 24%,#20453b 0%,#0b1716 55%,#090f11 100%) }
 .test-launch { width:100%; min-width:0; padding:clamp(18px,6vw,34px); border:1px solid #426255; border-radius:26px; background:linear-gradient(145deg,#1b332b,#111b1b 65%); box-shadow:0 22px 64px #0007,inset 0 1px #fff2; animation:testLaunchIn .35s ease-out both }
 .test-launch-mark { display:grid; place-items:center; width:58px; height:58px; margin:0 auto 16px; border:1px solid #c6a7658c; border-radius:18px; color:#f7d88f; background:linear-gradient(145deg,#5a4a2a,#263028); box-shadow:0 8px 22px #1118 }
@@ -5636,7 +5642,7 @@ function updateMythicNumbers() {
         <div class="grid-menu">
             <button type="button" class="menu-item menu-item-wide" id="ownerAdminOpen" aria-haspopup="dialog" hidden>
                 <span class="menu-item-icon bg-gold"><i class="fa-solid fa-key" aria-hidden="true"></i></span>
-                <span class="menu-item-text" style="flex:1;text-align:left">Вход в админку</span>
+                <span class="menu-item-text" style="flex:1;text-align:left">Админка</span>
             </button>
             <button type="button" class="menu-item menu-item-wide" id="openSupportChat" aria-haspopup="dialog">
                 <span class="menu-item-icon bg-green"><i class="fa-solid fa-headset" aria-hidden="true"></i></span>
@@ -5648,13 +5654,23 @@ function updateMythicNumbers() {
 
     </div>
     <dialog id="ownerAdminDialog" aria-labelledby="ownerAdminTitle">
-      <h2 id="ownerAdminTitle">Вход в админку</h2>
-      <p>Вставь одноразовый код в поле «Вход через Telegram» в админке на ПК.</p>
-      <input id="ownerAdminCode" type="text" readonly aria-label="Одноразовый код входа" autocomplete="off" spellcheck="false">
-      <form method="dialog">
-        <button type="button" id="ownerAdminCopy" class="ibtn">Скопировать код</button>
-        <button type="submit" class="ibtn">Закрыть</button>
+      <header><h2 id="ownerAdminTitle">Админка · dev</h2><form method="dialog"><button type="submit">Закрыть</button></form></header>
+      <form id="ownerAdminSearch">
+        <label>Игровой ID или ник<input name="query" type="search" maxlength="80" placeholder="Например, ID 1" autocomplete="off"></label>
+        <button type="submit">Найти игрока</button>
       </form>
+      <form id="ownerAdminGrant" hidden>
+        <label>Получатель<select name="player" required></select></label>
+        <label>Что выдать<select name="command">
+          <option value="money">Рубли и кристаллы</option><option value="premium">Пропуск</option>
+          <option value="number">SIM-номер</option><option value="give-secret">Секретный номер</option>
+          <option value="exclusive">Эксклюзив</option><option value="give-username">Юз</option>
+          <option value="tag">Тег</option><option value="card">Карточку</option>
+        </select></label>
+        <div id="ownerAdminFields"></div>
+        <button type="submit">Выдать</button>
+      </form>
+      <p id="ownerAdminStatus" role="status"></p>
     </dialog>
     <dialog id="rewardInbox" aria-labelledby="rewardInboxTitle">
       <header class="reward-inbox-head">
@@ -9776,30 +9792,114 @@ function configureTelegramHeader(app) {
     }
 }
 
+function setupOwnerMobileAdmin(isOwner, request) {
+    const dialog = document.getElementById('ownerAdminDialog');
+    const search = document.getElementById('ownerAdminSearch');
+    const grant = document.getElementById('ownerAdminGrant');
+    const fields = document.getElementById('ownerAdminFields');
+    const status = document.getElementById('ownerAdminStatus');
+    const recipients = grant.elements.namedItem('player');
+    const command = grant.elements.namedItem('command');
+    const searchButton = search.querySelector('button');
+    const grantButton = grant.querySelector('button');
+    let players = [], pending = null;
+    const price = '<label>Цена, ₽<input name="price" type="number" min="1" step="1" required></label>';
+    const rarity = '<label>Редкость<select name="rarity"><option value="common">Обычная</option><option value="rare">Редкая</option><option value="epic">Эпическая</option><option value="legendary">Легендарная</option><option value="mythic">Мифическая</option></select></label>';
+    const templates = {
+        money: '<label>Рубли<input name="rub" type="number" min="0" step="1" value="0" required></label><label>Кристаллы<input name="crystals" type="number" min="0" step="1" value="0" required></label>',
+        premium: '<label>Пропуск<select name="plan"><option value="base">Premium</option><option value="plus">Premium + 10 уровней</option></select></label>',
+        number: '<label>Номер<input name="formatted" placeholder="+7 910 123-45-67" inputmode="tel" maxlength="30" required></label>' + rarity + price,
+        'give-secret': '<label>Секретный номер<input name="formatted" inputmode="numeric" pattern="[0-9]{1,10}" maxlength="10" required></label>' + price,
+        exclusive: '<label>Название<input name="label" maxlength="12" required></label><label>Серийный номер<input name="serial" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required></label>' + price,
+        'give-username': '<label>Юз<input name="name" placeholder="@username" pattern="@[a-zA-Z0-9_]{1,32}" maxlength="33" required></label>',
+        tag: '<label>Тег<select name="tagKey">' + ['777','666','67','helper','major','boy','cool','yard','legend'].map(key =>
+            '<option value="' + key + '">' + escHtml(TAGS[key]?.label || key) + '</option>').join('') + '</select></label>',
+        card: '<label>ID карточки<input name="cardId" placeholder="SIM-EXAMPLE" maxlength="40" required></label>'
+            + rarity.replace('</select>','<option value="holo">Голографическая</option></select>')
+            + '<label>Тираж<input name="edition" type="number" min="1" step="1" value="1000" required></label><label>Номинал, SIM<input name="sim" type="number" min="0" max="99999" step="0.01" required></label><label>Дата выпуска<input name="release" type="date" required></label>' + price
+    };
+    function message(text, error = false) {
+        status.textContent = text;
+        status.toggleAttribute('data-error',error);
+    }
+    function payload(action, form) {
+        const value = key => String(form.get(key) || '').trim();
+        const amount = key => Number(value(key));
+        if (action === 'money') {
+            const rub = amount('rub'), crystals = amount('crystals');
+            if (!rub && !crystals) throw new Error('Укажи сумму выдачи.');
+            return {rub,crystals};
+        }
+        if (action === 'premium') return {plan:value('plan')};
+        if (action === 'tag') return {tagKey:value('tagKey'),equip:true};
+        if (action === 'give-username') {
+            const name = value('name'), rarity = calculateUzRarity(name);
+            return {name,rarity};
+        }
+        if (action === 'card') return {card:{id:value('cardId').toUpperCase(),rarity:value('rarity'),
+            edition:amount('edition'),sim:amount('sim'),release:value('release'),price:amount('price'),serial:null}};
+        if (action === 'give-secret') return {formatted:value('formatted'),price:amount('price'),uniqueId:'sec:{}'};
+        if (action === 'exclusive') {
+            const label = value('label').replace(/[<>"'\\]/g,''), serial = value('serial');
+            if (!label) throw new Error('Укажи название эксклюзива.');
+            return {formatted:label + ' · ' + serial.slice(-4),opName:'SECRET',rarity:'secret',price:amount('price'),
+                uniqueId:'exc:' + JSON.stringify({label,serial,op:'secret',rarity:'exclusive',series:'open',chip:'silver',frame:'obsidian',editionNo:1,editionTotal:500})};
+        }
+        const number = parseSpinNumber(value('formatted'));
+        if (!number) throw new Error('Введи SIM-номер в формате +7 910 123-45-67.');
+        const digits = number.digits.join('');
+        const operator = [...OPERATORS,...ROAM_OPERATORS].find(op => op.code === number.code);
+        return {formatted:`+${number.prefix} ${number.code} ${digits.slice(0,3)}–${digits.slice(3,5)}–${digits.slice(5,7)}`,
+            digits,opCode:number.code,opName:operator?.name || 'Роуминг',rarity:value('rarity'),price:amount('price')};
+    }
+    fields.innerHTML = templates[command.value];
+    command.addEventListener('change',() => { fields.innerHTML = templates[command.value]; });
+    document.getElementById('ownerAdminOpen').addEventListener('click',() => {
+        if (isOwner() && !dialog.open) dialog.showModal();
+    });
+    search.addEventListener('submit',async event => {
+        event.preventDefault();
+        if (searchButton.disabled || grantButton.disabled) return;
+        searchButton.disabled = true;
+        grant.hidden = true;
+        message('Ищем игрока…');
+        try {
+            const {players:found} = await request('search',{query:search.elements.namedItem('query').value.trim()});
+            players = found;
+            recipients.replaceChildren(...players.map(p => new Option(p.name + ' · ID ' + (p.public_id || '—'),p.id)));
+            grant.hidden = !players.length;
+            message(players.length ? '' : 'Игрок не найден.', !players.length);
+        } catch (error) { message(error.message || 'Не удалось найти игрока.',true); }
+        finally { searchButton.disabled = false; }
+    });
+    grant.addEventListener('submit',async event => {
+        event.preventDefault();
+        if (grantButton.disabled || searchButton.disabled) return;
+        const player = players.find(p => p.id === recipients.value), action = command.value;
+        if (!player) return;
+        let args;
+        try { args = {playerId:player.id,scope:player.scope,...payload(action,new FormData(grant))}; }
+        catch (error) { message(error.message,true); return; }
+        const stamp = JSON.stringify([action,args]);
+        if (pending?.stamp !== stamp) pending = {stamp,id:crypto.randomUUID()};
+        grantButton.disabled = true;
+        message('Выдаём награду…');
+        try {
+            await request(action,{...args,requestId:pending.id});
+            pending = null;
+            message('Выдано игроку ' + player.name + ' · ID ' + player.public_id);
+        } catch (error) {
+            if (error.status >= 400 && error.status < 500) pending = null;
+            message(error.message || 'Не удалось выдать награду.',true);
+        } finally { grantButton.disabled = false; }
+    });
+}
+
 async function startTelegramPreview() {
     const entry = document.getElementById('telegramEntryStatus');
     const entryMessage = entry.querySelector('p');
     const retry = entry.querySelector('button');
     const adminOpener = document.getElementById('ownerAdminOpen');
-    const adminDialog = document.getElementById('ownerAdminDialog');
-    const adminCode = document.getElementById('ownerAdminCode');
-    let ownerConnectCode = '';
-    adminOpener.addEventListener('click', () => {
-        if (!ownerConnectCode) return;
-        adminCode.value = ownerConnectCode;
-        adminDialog.showModal();
-    });
-    document.getElementById('ownerAdminCopy').addEventListener('click', async () => {
-        if (!ownerConnectCode) return;
-        try {
-            await navigator.clipboard.writeText(ownerConnectCode);
-            showToast('success', 'Код скопирован', '');
-        } catch {
-            adminCode.focus();
-            adminCode.select();
-        }
-    });
-    adminDialog.addEventListener('close', () => { adminCode.value = ''; });
     const launchPanel = document.getElementById('testLaunch');
     const launchDate = document.getElementById('testLaunchDate');
     const launchCheck = document.getElementById('testLaunchCheck');
@@ -10331,8 +10431,7 @@ async function startTelegramPreview() {
         profileId = state.profileId;
         publicId = state.publicId;
         gameOwner = state.gameOwner === true;
-        ownerConnectCode = gameOwner ? state.adminConnectCode || '' : '';
-        adminOpener.hidden = !ownerConnectCode;
+        adminOpener.hidden = !gameOwner;
         joinedAt = state.joinedAt;
         joinedAtEstimated = state.joinedAtEstimated === true;
         const profile = state.linkedProfile ?? await api({ action: 'profile' });
@@ -10373,6 +10472,7 @@ async function startTelegramPreview() {
       }
     }
     retry.addEventListener('click',loadGame);
+    setupOwnerMobileAdmin(() => gameOwner, (command,adminArgs) => api({action:'owner-admin',command,adminArgs}));
     launchCheck.addEventListener('click',checkLaunch);
     document.addEventListener('visibilitychange',() => { if (!document.hidden) void checkLaunch(); });
     await loadGame();
