@@ -11,11 +11,10 @@
     (() => {
       const incoming = new URL(location.href);
       const published = incoming.hostname === "nomeroksim.github.io";
-      const game = new URL(published ? "./telegram-preview.html" : "./game.html", incoming);
+      const game = new URL(published ? "./telegram-build-20261124-clean.html" : "./game.html", incoming);
       game.search = incoming.search;
       game.hash = incoming.hash;
-      if (published) game.searchParams.set("v", "20261124-separate-admin");
-      else game.searchParams.set("telegram-preview", "1");
+      if (!published) game.searchParams.set("telegram-preview", "1");
       location.replace(game.href);
     })();
   </script>
