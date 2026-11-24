@@ -2,21 +2,16 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="color-scheme" content="dark">
   <title>SIM CARD GAME</title>
   <style>html{background:#0b1512;color:#edf4eb;font-family:system-ui,sans-serif}</style>
   <script>
-    (() => {
-      const incoming = new URL(location.href);
-      const published = incoming.hostname === "nomeroksim.github.io";
-      const game = new URL(published ? "./telegram-build-20261124-clean.html" : "./game.html", incoming);
-      game.search = incoming.search;
-      game.hash = incoming.hash;
-      if (!published) game.searchParams.set("telegram-preview", "1");
-      location.replace(game.href);
-    })();
+    const incoming = new URL(location.href);
+    const target = new URL("./telegram-game.html", incoming);
+    target.search = incoming.search;
+    target.hash = incoming.hash;
+    location.replace(target.href);
   </script>
 </head>
 <body><noscript>Включи JavaScript, чтобы открыть игру.</noscript></body>
