@@ -8,7 +8,7 @@
   <script>
     const incoming = new URL(location.href);
     const published = incoming.hostname === "nomeroksim.github.io";
-    const game = new URL(published ? "./telegram-build-20261124-album.html" : "./game.html", incoming);
+    const game = new URL(published ? "./telegram-build-20261124-menu.html" : "./game.html", incoming);
     game.search = incoming.search;
     game.hash = incoming.hash;
     if (!published) game.searchParams.set("telegram-preview", "1");
