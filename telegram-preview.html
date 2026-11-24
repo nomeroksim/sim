@@ -5363,6 +5363,10 @@ function updateMythicNumbers() {
 }
 #telegramEntryStatus:not([hidden]) { position:fixed; inset:0; z-index:10000; display:grid; place-content:center; justify-items:center; gap:12px; padding:20px; text-align:center; background:#0b1512; color:#e0eee7 }
 #telegramEntryStatus button { min-height:44px; padding:0 14px; border:1px solid #385448; border-radius:10px; background:#1c3328; color:inherit }
+#ownerAdminOpen[hidden] { display:none }
+#ownerAdminDialog { width:min(420px,calc(100% - 32px)); margin:auto; padding:20px; border:1px solid #426255; border-radius:18px; background:#13241d; color:#edf4eb }
+#ownerAdminDialog::backdrop { background:#000a }
+#ownerAdminDialog input { width:100%; margin:14px 0; padding:10px; border:1px solid #426255; border-radius:8px; background:#0b1512; color:inherit }
 #telegramEntryStatus.is-launch { place-content:center; grid-template-columns:minmax(0,470px); overflow:auto; padding: max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom)); background:radial-gradient(ellipse at 50% 24%,#20453b 0%,#0b1716 55%,#090f11 100%) }
 .test-launch { width:100%; min-width:0; padding:clamp(18px,6vw,34px); border:1px solid #426255; border-radius:26px; background:linear-gradient(145deg,#1b332b,#111b1b 65%); box-shadow:0 22px 64px #0007,inset 0 1px #fff2; animation:testLaunchIn .35s ease-out both }
 .test-launch-mark { display:grid; place-items:center; width:58px; height:58px; margin:0 auto 16px; border:1px solid #c6a7658c; border-radius:18px; color:#f7d88f; background:linear-gradient(145deg,#5a4a2a,#263028); box-shadow:0 8px 22px #1118 }
@@ -5630,6 +5634,10 @@ function updateMythicNumbers() {
 
         <div class="section-title">Справка</div>
         <div class="grid-menu">
+            <button type="button" class="menu-item menu-item-wide" id="ownerAdminOpen" aria-haspopup="dialog" hidden>
+                <span class="menu-item-icon bg-gold"><i class="fa-solid fa-key" aria-hidden="true"></i></span>
+                <span class="menu-item-text" style="flex:1;text-align:left">Вход в админку</span>
+            </button>
             <button type="button" class="menu-item menu-item-wide" id="openSupportChat" aria-haspopup="dialog">
                 <span class="menu-item-icon bg-green"><i class="fa-solid fa-headset" aria-hidden="true"></i></span>
                 <span class="menu-item-text" style="flex:1;text-align:left">Техподдержка</span>
@@ -5639,6 +5647,15 @@ function updateMythicNumbers() {
         </div>
 
     </div>
+    <dialog id="ownerAdminDialog" aria-labelledby="ownerAdminTitle">
+      <h2 id="ownerAdminTitle">Вход в админку</h2>
+      <p>Вставь одноразовый код в поле «Вход через Telegram» в админке на ПК.</p>
+      <input id="ownerAdminCode" type="text" readonly aria-label="Одноразовый код входа" autocomplete="off" spellcheck="false">
+      <form method="dialog">
+        <button type="button" id="ownerAdminCopy" class="ibtn">Скопировать код</button>
+        <button type="submit" class="ibtn">Закрыть</button>
+      </form>
+    </dialog>
     <dialog id="rewardInbox" aria-labelledby="rewardInboxTitle">
       <header class="reward-inbox-head">
         <span class="reward-inbox-gift"><i class="fa-solid fa-gift" aria-hidden="true"></i></span>
@@ -9763,6 +9780,26 @@ async function startTelegramPreview() {
     const entry = document.getElementById('telegramEntryStatus');
     const entryMessage = entry.querySelector('p');
     const retry = entry.querySelector('button');
+    const adminOpener = document.getElementById('ownerAdminOpen');
+    const adminDialog = document.getElementById('ownerAdminDialog');
+    const adminCode = document.getElementById('ownerAdminCode');
+    let ownerConnectCode = '';
+    adminOpener.addEventListener('click', () => {
+        if (!ownerConnectCode) return;
+        adminCode.value = ownerConnectCode;
+        adminDialog.showModal();
+    });
+    document.getElementById('ownerAdminCopy').addEventListener('click', async () => {
+        if (!ownerConnectCode) return;
+        try {
+            await navigator.clipboard.writeText(ownerConnectCode);
+            showToast('success', 'Код скопирован', '');
+        } catch {
+            adminCode.focus();
+            adminCode.select();
+        }
+    });
+    adminDialog.addEventListener('close', () => { adminCode.value = ''; });
     const launchPanel = document.getElementById('testLaunch');
     const launchDate = document.getElementById('testLaunchDate');
     const launchCheck = document.getElementById('testLaunchCheck');
@@ -9790,7 +9827,7 @@ async function startTelegramPreview() {
         if (target.id === 'openReactorButton' && telegramGame?.canRoll()) return;
         if (target.id === 'openBlackjackButton' && telegramGame?.canRoll()) return;
         if (target.id === 'openGameRules') return;
-        if (target.id === 'openSupportChat') return;
+        if (target.id === 'openSupportChat' || target.id === 'ownerAdminOpen') return;
         if (target.id === 'openRewardInbox' && telegramGame) return;
         if (target.dataset.cardAction === 'collection' && telegramGame) return;
         if (target.dataset.nx === 'open-card-shop' && telegramGame) return;
@@ -10294,6 +10331,8 @@ async function startTelegramPreview() {
         profileId = state.profileId;
         publicId = state.publicId;
         gameOwner = state.gameOwner === true;
+        ownerConnectCode = gameOwner ? state.adminConnectCode || '' : '';
+        adminOpener.hidden = !ownerConnectCode;
         joinedAt = state.joinedAt;
         joinedAtEstimated = state.joinedAtEstimated === true;
         const profile = state.linkedProfile ?? await api({ action: 'profile' });
