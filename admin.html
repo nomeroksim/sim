@@ -22,6 +22,7 @@ button,input,select { font:inherit }
 #ownerAdminDialog header { display:flex; align-items:center; justify-content:space-between; gap:12px }
 #ownerAdminDialog form:not([method=dialog]),#ownerAdminDialog label,#ownerAdminFields { display:grid; gap:7px; margin-top:10px }
 #ownerAdminDialog #ownerAdminGrant[hidden] { display:none }
+#ownerAdminDialog label[hidden] { display:none }
 #ownerAdminDialog input,#ownerAdminDialog select { width:100%; min-height:42px; padding:9px; border:1px solid #426255; border-radius:8px; background:#0b1512; color:inherit; font-size:16px }
 #ownerAdminDialog button { min-height:42px; padding:8px 12px; border:1px solid #426255; border-radius:8px; color:inherit; background:#254537 }
 #ownerAdminStatus { margin:10px 0 0; color:#b3e8cc }
@@ -42,7 +43,7 @@ button,input,select { font:inherit }
         <label>Получатель<select name="player" required></select></label>
         <label>Что выдать<select name="command">
           <option value="money">Рубли и кристаллы</option><option value="premium">Пропуск</option>
-          <option value="number">SIM-номер</option><option value="give-secret">Секретный номер</option>
+          <option value="number">SIM-номер</option><option value="number-888">Кристальный номер +888</option><option value="give-secret">Секретный номер</option>
           <option value="exclusive">Эксклюзив</option><option value="give-username">Юз</option>
           <option value="tag">Тег</option><option value="card">Карточку</option>
         </select></label>
@@ -55,9 +56,21 @@ button,input,select { font:inherit }
 <script>
 const TAGS=Object.fromEntries(Object.entries({helper:'Помощник',major:'Мажор',boy:'Пацанчик',cool:'Крутой',yard:'Лярд',legend:'Легенда сезона'}).map(([key,label])=>[key,{label}]));
 const escHtml=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ROAM_CODES=['7','1','44','67','99'];
-const OPERATORS=[{code:'910',name:'МТС'},{code:'920',name:'Мегафон'},{code:'905',name:'Билайн'},{code:'950',name:'Tele2'}];
-const ROAM_OPERATORS=[];
+const ROAM_OPERATORS={
+  '1':['AT&T','Verizon','Rogers'],'44':['Vodafone','EE','O2'],'67':['Digicel','Telikom','GHOST'],'99':['SECRET NET','VOID','NULL'],
+  '88':['ATLAS','LAGUNA','PEARL'],'87':['ORBIT','NOVA','PULSAR'],'34':['SOL','IBERIA','COSTA'],
+  '56':['ANDES','PACIFICO','CONDOR'],'61':['CORAL','OUTBACK','SYDNEY']
+};
+const ROAM_CODES=['7',...Object.keys(ROAM_OPERATORS)];
+const HOME_OPERATORS={
+  '910':'МТС','911':'МТС','915':'МТС','920':'Мегафон','924':'Мегафон','926':'Мегафон','928':'Мегафон',
+  '900':'Билайн','905':'Билайн','977':'Билайн','950':'Tele2','953':'Т2','901':'Yota','995':'СберМобайл','996':'Т-Мобайл'
+};
+const ROAM888_PRESETS=[
+  ['88888888',26000],['00000000',15000],['00888800',3000],['88008800',3000],['88880000',2400],
+  ['88880088',1600],['00008888',1200],['88881234',650],['12345678',450],['88000088',250]
+];
+const format888=digits=>'+888 '+digits.slice(0,4)+' '+digits.slice(4,6)+' '+digits.slice(6);
 function parseSpinNumber(raw) {
     const text = String(raw || '').trim();
     const digits = text.replace(/\D/g, '');
@@ -106,7 +119,11 @@ function setupOwnerMobileAdmin(isOwner, request) {
     const templates = {
         money: '<label>Рубли<input name="rub" type="number" min="0" step="1" value="0" required></label><label>Кристаллы<input name="crystals" type="number" min="0" step="1" value="0" required></label>',
         premium: '<label>Пропуск<select name="plan"><option value="base">Premium</option><option value="plus">Premium + 10 уровней</option></select></label>',
-        number: '<label>Номер<input name="formatted" placeholder="+7 910 123-45-67" inputmode="tel" maxlength="30" required></label>' + rarity + price,
+        number: '<label>Номер<input name="formatted" placeholder="+88 123 456-78-90" inputmode="tel" maxlength="30" required></label>' +
+          '<label hidden>Оператор<select name="roamOperator"></select></label>' + rarity + price,
+        'number-888': '<label>Комбинация<select name="preset888">' + ROAM888_PRESETS.map(([digits,value]) =>
+          '<option value="'+digits+'">'+format888(digits)+' · '+value.toLocaleString('ru-RU')+' ◆</option>').join('') +
+          '<option value="custom">Другие 8 цифр</option></select></label><label hidden>8 цифр после +888<input name="custom888" inputmode="numeric" pattern="[0-9]{8}" maxlength="8"></label>',
         'give-secret': '<label>Секретный номер<input name="formatted" inputmode="numeric" pattern="[0-9]{1,10}" maxlength="10" required></label>' + price,
         exclusive: '<label>Название<input name="label" maxlength="12" required></label><label>Серийный номер<input name="serial" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required></label>' + price,
         'give-username': '<label>Юз<input name="name" placeholder="@username" pattern="@[a-zA-Z0-9_]{1,32}" maxlength="33" required></label>',
@@ -137,6 +154,11 @@ function setupOwnerMobileAdmin(isOwner, request) {
         if (action === 'card') return {card:{id:value('cardId').toUpperCase(),rarity:value('rarity'),
             edition:amount('edition'),sim:amount('sim'),release:value('release'),price:amount('price'),serial:null}};
         if (action === 'give-secret') return {formatted:value('formatted'),price:amount('price'),uniqueId:'sec:{}'};
+        if (action === 'number-888') {
+            const digits = value('preset888') === 'custom' ? value('custom888') : value('preset888');
+            if (!/^\d{8}$/.test(digits)) throw new Error('Укажи ровно 8 цифр после +888.');
+            return {formatted:format888(digits)};
+        }
         if (action === 'exclusive') {
             const label = value('label').replace(/[<>"'\\]/g,''), serial = value('serial');
             if (!label) throw new Error('Укажи название эксклюзива.');
@@ -146,10 +168,28 @@ function setupOwnerMobileAdmin(isOwner, request) {
         const number = parseSpinNumber(value('formatted'));
         if (!number) throw new Error('Введи SIM-номер в формате +7 910 123-45-67.');
         const digits = number.digits.join('');
-        const operator = [...OPERATORS,...ROAM_OPERATORS].find(op => op.code === number.code);
+        const names = ROAM_OPERATORS[number.prefix];
+        const operator = names?.includes(value('roamOperator')) ? value('roamOperator')
+            : names?.[0] || HOME_OPERATORS[number.code] || 'Роуминг';
         return {formatted:`+${number.prefix} ${number.code} ${digits.slice(0,3)}–${digits.slice(3,5)}–${digits.slice(5,7)}`,
-            digits,opCode:number.code,opName:operator?.name || 'Роуминг',rarity:value('rarity'),price:amount('price')};
+            digits,opCode:number.code,opName:operator,rarity:value('rarity'),price:amount('price')};
     }
+    fields.addEventListener('change', event => {
+        if (event.target.name !== 'preset888') return;
+        const input = fields.querySelector('[name="custom888"]');
+        input.required = event.target.value === 'custom';
+        input.parentElement.hidden = !input.required;
+    });
+    fields.addEventListener('input', event => {
+        if (command.value !== 'number' || event.target.name !== 'formatted') return;
+        const prefix = parseSpinNumber(event.target.value)?.prefix;
+        const select = fields.querySelector('[name="roamOperator"]');
+        if (select.dataset.prefix === prefix) return;
+        select.dataset.prefix = prefix || '';
+        const names = ROAM_OPERATORS[prefix] || [];
+        select.replaceChildren(...names.map(name => new Option(name,name)));
+        select.parentElement.hidden = !names.length;
+    });
     fields.innerHTML = templates[command.value];
     command.addEventListener('change',() => { fields.innerHTML = templates[command.value]; });
     document.getElementById('ownerAdminOpen').addEventListener('click',() => {
@@ -183,7 +223,7 @@ function setupOwnerMobileAdmin(isOwner, request) {
         grantButton.disabled = true;
         message('Выдаём награду…');
         try {
-            await request(action,{...args,requestId:pending.id});
+            await request(action === 'number-888' ? 'number' : action,{...args,requestId:pending.id});
             pending = null;
             message('Выдано игроку ' + player.name + ' · ID ' + player.public_id);
         } catch (error) {
