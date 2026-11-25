@@ -122,7 +122,7 @@ function setupOwnerMobileAdmin(isOwner, request) {
         number: '<label>Номер<input name="formatted" placeholder="+88 123 456-78-90" inputmode="tel" maxlength="30" required></label>' +
           '<label hidden>Оператор<select name="roamOperator"></select></label>' + rarity + price,
         'number-888': '<label>Комбинация<select name="preset888">' + ROAM888_PRESETS.map(([digits,value]) =>
-          '<option value="'+digits+'">'+format888(digits)+' · '+value.toLocaleString('ru-RU')+' ◆</option>').join('') +
+          '<option value="'+digits+'">'+format888(digits)+' · '+value.toLocaleString('ru-RU')+' 💎</option>').join('') +
           '<option value="custom">Другие 8 цифр</option></select></label><label hidden>8 цифр после +888<input name="custom888" inputmode="numeric" pattern="[0-9]{8}" maxlength="8"></label>',
         'give-secret': '<label>Секретный номер<input name="formatted" inputmode="numeric" pattern="[0-9]{1,10}" maxlength="10" required></label>' + price,
         exclusive: '<label>Название<input name="label" maxlength="12" required></label><label>Серийный номер<input name="serial" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required></label>' + price,
@@ -247,7 +247,11 @@ function setupOwnerMobileAdmin(isOwner, request) {
    if(!response.ok||!data)throw Object.assign(new Error(data?.error||'Сервер админки временно недоступен.'),{status:response.status});
    return data;
  }
- if(!app?.initData){entry.textContent='Открой отдельное мини-приложение «Админка» в Telegram.';return;}
+ if(!app?.initData){
+   const entryUrl=new URL(location.href);
+   location.replace(new URL(entryUrl.hostname==='nomeroksim.github.io' ? 'admin-desktop.html' : 'admin.html',entryUrl));
+   return;
+ }
  app.ready();
  try {
    const identity=await api({action:'owner-admin-login',initData:app.initData});
