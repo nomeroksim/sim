@@ -11,7 +11,7 @@
     (() => {
       const incoming = new URL(location.href);
       const published = incoming.hostname === "nomeroksim.github.io";
-      const game = new URL(published ? "./telegram-build-20261125-album-grid.html" : "./game.html", incoming);
+      const game = new URL(published ? "./telegram-build-20261125-octave-foil.html" : "./game.html", incoming);
       game.search = incoming.search;
       game.hash = incoming.hash;
       if (!published) game.searchParams.set("telegram-preview", "1");
